@@ -1,8 +1,8 @@
 # 비누 조각 3D — 인수인계
 
 ## 지금 상태 요약 (2026-10-07 저녁 기준 — 먼저 이것만 읽으면 됨)
-- **폴더/저장소**: `Claude_etc/soap-carve`, git `main`. 커밋은 `aa5c2ab Initial snapshot`(10-07 13:30) 하나뿐이고,
-  그 뒤 작업(AA 쌓기·FXAA, 회귀 기준 갱신, 자동 플레이 테스트)은 **전부 커밋 안 됨**. 원격 없음.
+- **폴더/저장소**: `Claude_etc/soap-carve`, git `main`. 커밋: `aa5c2ab` 첫 스냅샷(10-07 13:30) →
+  10-07 밤 `85c047d`로 그날 작업 전부 커밋(회귀 캡처는 reference·beforeAA·modes만, 나머지는 .gitignore). 원격 없음.
 - **배포**: https://soap-carve.vercel.app — 2026-10-07 밤에 그날 작업 전부 포함해 재배포(dpl_7cgVQ9Mat7tJZGqPKg5gGGQKCKzx). 배포판에서 새 HUD 줄·dropSlivers·새 완성 기준 확인,
   tools/ 는 404(.vercelignore). 아래 기록의 '미배포' 표시는 그 시점 기준. 재배포: 이 폴더에서 `npx vercel@latest deploy --prod --yes`(사용자 확인 후).
 - **실행**: launch.json `soap-carve` (127.0.0.1:8933, no-store 캐시). 숨은 pane에선 캔버스를 960×640으로 고정하고 `carve.frame()`으로 진행.
