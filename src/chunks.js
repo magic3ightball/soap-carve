@@ -119,7 +119,73 @@ export class Chunks {
       dropped += cnt * h * h * h;
       if (!tiny) this.spawn((idx) => (keep[idx] < 0 && inIsl(idx)) ? keep[idx] : h, lo, hi, stroke, [0, 0, 0]);
     }
+    this.dropSlivers();                                       // 보이지도 않을 만큼 작아 소리(쿵)는 내지 않는다
     return dropped;
+  }
+
+  // 1 mm 칸 검사는 본체에서 1 mm 안에 떠 있는 0.5 mm 부스러기를 본체에 붙은 걸로 본다 → 허공에 점처럼 남았다.
+  // 이번 획이 바꾼 범위(sdf.touched)만 0.5 mm로 다시 연결 검사해, 범위 안에 갇힌 작은 묶음(SLIVER_MAX 복셀 이하)을 지운다.
+  // 범위의 안쪽 면에 닿는 묶음은 밖으로 이어질 수 있으니 그대로 둔다.
+  dropSlivers() {
+    const sdf = this.sdf, t = sdf.touched, d = sdf.d, h = sdf.h, [nx, ny, nz] = sdf.dims;
+    sdf.touched = null;
+    if (!t) return 0;
+    const SLIVER_MAX = 64;
+    const i0 = Math.max(0, t[0] - 2), j0 = Math.max(0, t[1] - 2), k0 = Math.max(0, t[2] - 2);
+    const i1 = Math.min(nx, t[3] + 2), j1 = Math.min(ny, t[4] + 2), k1 = Math.min(nz, t[5] + 2);
+    const bx = i1 - i0, by = j1 - j0, bz = k1 - k0, B = bx * by * bz;
+    if (B <= 0) return 0;
+    const seen = new Uint8Array(B), stack = new Int32Array(B), group = [];
+    const gid = (a, b, c) => (i0 + a) + nx * ((j0 + b) + ny * (k0 + c));
+    let removed = 0, li = [1e9, 1e9, 1e9], hi = [-1, -1, -1];
+    for (let s0 = 0; s0 < B; s0++) {
+      if (seen[s0]) continue;
+      const a0 = s0 % bx, b0 = ((s0 / bx) | 0) % by, c0 = (s0 / (bx * by)) | 0;
+      if (d[gid(a0, b0, c0)] >= 0) continue;
+      let sp = 0, open = false, big = false;
+      group.length = 0;
+      stack[sp++] = s0; seen[s0] = 1;
+      while (sp) {
+        const v = stack[--sp];
+        const a = v % bx, b = ((v / bx) | 0) % by, c = (v / (bx * by)) | 0;
+        if (!big) { group.push(v); if (group.length > SLIVER_MAX) big = true; }
+        // 범위 면에 닿았는데 그 면이 격자 끝이 아니면 밖으로 이어질 수 있다
+        if ((a === 0 && i0 > 0) || (a === bx - 1 && i1 < nx) || (b === 0 && j0 > 0) || (b === by - 1 && j1 < ny) ||
+            (c === 0 && k0 > 0) || (c === bz - 1 && k1 < nz)) open = true;
+        const nb = [a > 0 ? v - 1 : -1, a < bx - 1 ? v + 1 : -1, b > 0 ? v - bx : -1, b < by - 1 ? v + bx : -1,
+          c > 0 ? v - bx * by : -1, c < bz - 1 ? v + bx * by : -1];
+        for (const u of nb) {
+          if (u < 0 || seen[u]) continue;
+          const ua = u % bx, ub = ((u / bx) | 0) % by, uc = (u / (bx * by)) | 0;
+          if (d[gid(ua, ub, uc)] < 0) { seen[u] = 1; stack[sp++] = u; }
+        }
+      }
+      if (open || big) continue;
+      for (const v of group) {
+        const a = v % bx, b = ((v / bx) | 0) % by, c = (v / (bx * by)) | 0, g = gid(a, b, c);
+        d[g] = Math.max(-d[g], h * 0.5); removed++;
+        const p = [i0 + a, j0 + b, k0 + c];
+        for (let q = 0; q < 3; q++) { li[q] = Math.min(li[q], p[q]); hi[q] = Math.max(hi[q], p[q]); }
+      }
+    }
+    // 유령 표면: 얇은 판을 칼이 관통하면 max(old,-tool)이 허공에 '칼 면까지 거리'(0~0.1 mm대 양수)를 남긴다.
+    // 렌더러는 스치는 광선용으로 0.012 cm 안이면 맞은 걸로 쳐서 이게 점으로 보였다 → 근처(±2칸)에 비누가 없으면 반 칸 거리로 올린다.
+    let ghosts = 0;
+    for (let c = 0; c < bz; c++) for (let b = 0; b < by; b++) for (let a = 0; a < bx; a++) {
+      const g = gid(a, b, c), dv = d[g];
+      if (dv < 0 || dv >= h * 0.5) continue;
+      let solid = false;
+      const I = i0 + a, J = j0 + b, K = k0 + c;
+      for (let z = Math.max(0, K - 2); z <= Math.min(nz - 1, K + 2) && !solid; z++)
+        for (let y = Math.max(0, J - 2); y <= Math.min(ny - 1, J + 2) && !solid; y++)
+          for (let x = Math.max(0, I - 2); x <= Math.min(nx - 1, I + 2); x++) if (d[x + nx * (y + ny * z)] < 0) { solid = true; break; }
+      if (solid) continue;
+      d[g] = h * 0.5; ghosts++;
+      li[0] = Math.min(li[0], I); li[1] = Math.min(li[1], J); li[2] = Math.min(li[2], K);
+      hi[0] = Math.max(hi[0], I); hi[1] = Math.max(hi[1], J); hi[2] = Math.max(hi[2], K);
+    }
+    if (removed || ghosts) { sdf.markDirty(li[0], li[1], li[2], hi[0] + 1, hi[1] + 1, hi[2] + 1); sdf.touched = null; }
+    return removed * h * h * h;
   }
 
   // 떼어 낸 덩어리: 자기 거리장(0.5 mm, 원래 좌표)을 3D 텍스처로 올려 본체처럼 레이마칭으로 그리고, 강체로 떨어뜨린다.

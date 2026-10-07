@@ -26,6 +26,7 @@ export class Water {
       usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST });
     this.bytes = new Uint8Array(this.n);
     this.dirty = true;
+    this.version = 0;             // GPU로 올릴 때마다 +1
     this.events = [];             // 소리용: { type: 'drip', pos }
     this.dripT = 0;
     this.upload();
@@ -126,5 +127,6 @@ export class Water {
     const [hx, hy] = this.dims;
     this.device.queue.writeTexture({ texture: this.tex }, b, { bytesPerRow: hx, rowsPerImage: hy }, this.dims);
     this.dirty = false;
+    this.version++;
   }
 }

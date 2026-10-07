@@ -359,17 +359,28 @@ function setTarget(key) {
   syncGuide();
   refreshEmbed();
 }
+// 완성 기준. 예전(진행 90%·너무 깎음 10%)은 물고기 둘레에 3 mm 넘는 투명 테두리가 1.5 cm³ 남은 '덩어리'에서도 완성이 떴다.
+// 자동 플레이로 끝까지 깎으면 진행 96%·3 mm 넘는 군살 0.06 cm³·너무 깎음 1.8%까지 간다 (tools/regress/out/strict1).
+const DONE = { progress: 0.95, over: 0.05, thick: 0.1 };
 function rescore(base = false) {
   if (!tgt.arr) return;
   const s = score(sdf, tgt.arr);
   if (base) tgt.excess0 = s.excess;
   tgt.progress = tgt.excess0 ? 1 - s.excess / tgt.excess0 : 0;
   tgt.over = s.over / Math.max(s.inside, 1);
+  tgt.thick = s.thick * sdf.h ** 3;            // cm³
   $('p_val').textContent = Math.round(tgt.progress * 100) + '%';
   $('o_val').textContent = (tgt.over * 100).toFixed(1) + '%';
+  $('t_val').textContent = tgt.thick.toFixed(2) + ' cm³';
   $('p_bar').style.width = Math.max(0, tgt.progress * 100) + '%';
-  $('o_val').classList.toggle('warn', tgt.over > 0.05);
-  if (!tgt.done && tgt.progress >= 0.9 && tgt.over < 0.1) {
+  $('o_val').classList.toggle('warn', tgt.over > DONE.over);
+  $('t_val').classList.toggle('warn', tgt.thick >= DONE.thick);
+  if (base) tgt.hinted = false;
+  if (!tgt.done && !tgt.hinted && tgt.progress >= 0.9) {
+    tgt.hinted = true;
+    toast(`거의 다 됐어요 · 진행 ${DONE.progress * 100}% 이상, 3 mm 넘게 남은 곳 ${DONE.thick} cm³ 미만, 너무 깎음 ${DONE.over * 100}% 미만이면 완성`);
+  }
+  if (!tgt.done && tgt.progress >= DONE.progress && tgt.over < DONE.over && tgt.thick < DONE.thick) {
     tgt.done = true;
     toast(`${TARGETS[tgt.key].name} 완성! 정확도 ${Math.round((1 - tgt.over) * 100)}% · G로 가이드를 끄고 감상해 보세요`);
   }
@@ -448,12 +459,17 @@ function adaptScale(now) {
   if (frameEma > 19) renderScale = Math.max(0.5, renderScale - 0.1);
   else if (frameEma < 14) renderScale = Math.min(1, renderScale + 0.05);
 }
+const STILL_AFTER = 6;       // 장면이 이만큼(프레임) 안 바뀌면 원래 해상도로 쌓기 시작
+let sliverT = 0;             // 허공 부스러기 치우기 간격 (초)
 const perf = { frames: 0, ms: 0 };
 function frame(dtOverride) {
   const now = performance.now();
   const dt = dtOverride ?? Math.min(0.05, (now - lastT) / 1000);
+  // 장면이 몇 프레임째 그대로면 '가만히' → 화면 해상도 그대로 그리며 여러 장을 쌓아 매끈하게 (renderer.n)
+  const still = renderer.stillFrames >= STILL_AFTER;
   // 60 ms 넘게 빈 간격은 탭이 숨었거나 멈춘 것 → 해상도 판단에서 뺀다 (안 그러면 돌아왔을 때 화질이 최저로 떨어져 있다)
-  if (dtOverride === undefined && now - lastT < 60) frameEma = frameEma * 0.9 + (now - lastT) * 0.1;
+  // 가만히 쌓는 프레임(원래 해상도라 느릴 수 있다)도 움직일 때의 해상도 판단에서 뺀다
+  if (dtOverride === undefined && now - lastT < 60 && !still) frameEma = frameEma * 0.9 + (now - lastT) * 0.1;
   lastT = now;
   const dpr = Math.min(devicePixelRatio || 1, 1.5);
   const [cw, ch] = size();
@@ -471,6 +487,9 @@ function frame(dtOverride) {
   for (const ev of chips.events) ev.type === 'off' ? sound.chipOff(panOf(ev.pos)) : sound.hit(ev.v, false, panOf(ev.pos));
   for (const ev of chunks.events) sound.hit(ev.v, true, panOf(ev.pos));
   water.step(dt);
+  // 물이 획 사이에도 계속 녹이며 허공에 0.5 mm 부스러기를 남긴다 → 깎는 중이 아닐 때 0.5초마다 바뀐 범위만 치운다
+  sliverT += dt;
+  if (sliverT > 0.5 && sdf.touched && st.mode !== 'cut' && st.mode !== 'sand' && st.mode !== 'slice') { sliverT = 0; chunks.dropSlivers(); }
   for (const ev of water.events) sound.drip(panOf(ev.pos));
   chips.events.length = 0; chunks.events.length = 0; water.events.length = 0;
   sound.update(st.mode === 'cut' && st.frameVol > 0, knife.speed, st.mode === 'sand', st.frameLen > 0 ? st.frameVol / st.frameLen : 0);
@@ -479,20 +498,24 @@ function frame(dtOverride) {
   sdf.upload();
   water.upload();
   // 3D 장면 해상도 = 화면 × renderScale (프레임이 느리면 자동으로 낮춘다)
-  adaptScale(now);
-  const SW = Math.max(1, Math.round(W * renderScale)), SH = Math.max(1, Math.round(H * renderScale));
+  if (!still) adaptScale(now);
+  const sc = still ? 1 : renderScale;
+  const SW = Math.max(1, Math.round(W * sc)), SH = Math.max(1, Math.round(H * sc));
   renderer.resize(SW, SH);
   // 미리보기 창 위치는 CSS 상자(#pv_box)를 따른다
   if (tgt.key) {
     const r = $('pv_box').getBoundingClientRect(), cr = canvas.getBoundingClientRect();
-    const k = dpr * renderScale;
+    const k = dpr * sc;
     const x = Math.max(0, Math.round((r.left - cr.left) * k)), y = Math.max(0, Math.round((r.top - cr.top) * k));
     renderer.preview = { x, y, w: Math.min(Math.round(r.width * k), SW - x), h: Math.min(Math.round(r.height * k), SH - y) };
   } else renderer.preview = null;
   renderer.draw(cam, knife, chips, chunks, [SW, SH], st.hover);
   perf.frames++; perf.ms += performance.now() - t0;
 }
-(function loop() { frame(); requestAnimationFrame(loop); })();
+// ?regress / ?playtest: 테스트가 carve.frame()으로 직접 진행한다. 화면 루프까지 돌면 실제 시계로 칼 자세 등이 바뀌어
+// 같은 코드라도 실행마다 결과가 달라진다 (Browser pane이 rAF를 돌릴 때 실제로 겪음) → 테스트 중엔 루프에서 그리지 않는다.
+const testMode = /[?&](regress|playtest)=/.test(location.search);
+(function loop() { if (!testMode) frame(); requestAnimationFrame(loop); })();
 
 // 테스트 훅
 window.carve = {
@@ -513,6 +536,8 @@ window.carve = {
 // ?regress=<이름>: 고정 장면 회귀 검사 (tools/regress, 배포에는 없다)
 const regressLabel = new URLSearchParams(location.search).get('regress');
 if (regressLabel) import('../tools/regress/scenes.js').then(m => m.run(window.carve, regressLabel));
+const playLabel = new URLSearchParams(location.search).get('playtest');   // 물고기 깎기 자동 플레이 (tools/regress/playtest.js)
+if (playLabel) import('../tools/regress/playtest.js').then(m => m.run(window.carve, playLabel));
 
 // ?debug: 소리 다듬기 패널 (귀로 맞춘 값은 '값 복사'로 가져다 SOUND_DEFAULTS에 넣는다)
 if (new URLSearchParams(location.search).has('debug')) {

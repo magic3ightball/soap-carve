@@ -1,4 +1,4 @@
-# 회귀 검사 캡처 수신기 (로컬 전용): POST /<이름>/<장면> 의 dataURL PNG를 out/<이름>/<장면>.png 로 저장
+# 회귀 검사 캡처 수신기 (로컬 전용): POST /<이름>/<장면> 의 dataURL PNG를 out/<이름>/<장면>.png 로, 그 밖의 글은 .json으로 저장
 import http.server, base64, os
 OUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'out')
 
@@ -15,8 +15,12 @@ class H(http.server.BaseHTTPRequestHandler):
             self.send_response(400); self._cors(); self.end_headers(); return
         body = self.rfile.read(int(self.headers['Content-Length'])).decode()
         d = os.path.join(OUT, parts[0]); os.makedirs(d, exist_ok=True)
-        with open(os.path.join(d, parts[1] + '.png'), 'wb') as f:
-            f.write(base64.b64decode(body.split(',', 1)[1]))
+        if body.startswith('data:'):
+            with open(os.path.join(d, parts[1] + '.png'), 'wb') as f:
+                f.write(base64.b64decode(body.split(',', 1)[1]))
+        else:                                                   # 기록(JSON) 등 글
+            with open(os.path.join(d, parts[1] + '.json'), 'w') as f:
+                f.write(body)
         self.send_response(200); self._cors(); self.end_headers(); self.wfile.write(b'ok')
     def log_message(self, *a): pass
 

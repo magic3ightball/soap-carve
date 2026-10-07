@@ -3,7 +3,7 @@
 수정 전후로 같은 장면(깎기·물·자르기)을 똑같이 재현해 캡처하고 비교한다. 렌더링을 고칠 때마다 먼저 돌린다.
 
 1. 수신기: `python3 tools/regress/recv.py` (127.0.0.1:8941, 로컬 전용)
-2. 개발 서버(launch.json `soap-carve`, 8933)에서 `http://127.0.0.1:8933/?regress=<이름>` 열기 → 제목이 `regress done 6`이 될 때까지 대기
+2. 개발 서버(launch.json `soap-carve`, 8933)에서 `http://127.0.0.1:8933/?regress=<이름>` 열기 → 제목이 `regress done 7`이 될 때까지 대기
 3. 비교: `python3 tools/regress/compare.py <기준> <새것>` → 수치 + `out/cmp_<기준>_<새것>/*.png`([기준 | 새것 | 차이×4])
 
 장면은 `scenes.js`의 `SCENES`. 같은 기계·같은 창이면 결과가 픽셀 단위로 같아야 한다(난수 고정, 해상도 960×640 CSS 고정).

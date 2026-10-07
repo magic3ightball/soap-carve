@@ -561,11 +561,11 @@ export class Renderer {
     const march = device.createShaderModule({ code: MARCH_WGSL });
     const mesh = device.createShaderModule({ code: MESH_WGSL });
     this.modules = [march, mesh];
-    const depth = { format: 'depth24plus', depthWriteEnabled: true, depthCompare: 'less' };
+    const depth = { format: 'depth32float', depthWriteEnabled: true, depthCompare: 'less' };
     this.marchPipe = device.createRenderPipeline({ layout: 'auto',
       vertex: { module: march, entryPoint: 'vsFull' },
       fragment: { module: march, entryPoint: 'fsMarch', targets: [{ format }] },
-      depthStencil: { format: 'depth24plus', depthWriteEnabled: true, depthCompare: 'always' } });
+      depthStencil: { format: 'depth32float', depthWriteEnabled: true, depthCompare: 'always' } });
     const smp = device.createSampler({ magFilter: 'linear', minFilter: 'linear' });
     const marchBG = buf => device.createBindGroup({ layout: this.marchPipe.getBindGroupLayout(0), entries: [
       { binding: 0, resource: { buffer: buf } }, { binding: 1, resource: sdf.tex.createView() },
@@ -599,7 +599,7 @@ export class Renderer {
     // 칩은 반투명: 섞어 그리고 깊이는 쓰지 않는다 (불투명한 것들 다음에 그림)
     this.chipPipe = mk('vsChip', 'fsChip', chipLayout, { blend: {
       color: { srcFactor: 'src-alpha', dstFactor: 'one-minus-src-alpha' }, alpha: { srcFactor: 'zero', dstFactor: 'one' } },
-      depth: { format: 'depth24plus', depthWriteEnabled: false, depthCompare: 'less' } });
+      depth: { format: 'depth32float', depthWriteEnabled: false, depthCompare: 'less' } });
     // 떨어진 조각: 상자 뒷면을 그려 그 안을 레이마칭 (group 1 = 조각 uniform·거리장 텍스처)
     const chunkMod = device.createShaderModule({ code: CHUNK_WGSL });
     this.modules.push(chunkMod);
@@ -662,7 +662,8 @@ export class Renderer {
         let lW = lum(textureSampleLevel(src, s, i.uv + vec2f(-t.x, 0.0), 0.0).rgb);
         let lE = lum(textureSampleLevel(src, s, i.uv + vec2f(t.x, 0.0), 0.0).rgb);
         let lM = lum(base.rgb);
-        let lMin = min(lM, min(min(lN, lS), min(lW, lE))), lMax = max(lM, max(max(lN, lS), max(lW, lE)));
+        let lMin = min(lM, min(min(lN, lS), min(lW, lE)));
+        let lMax = max(lM, max(max(lN, lS), max(lW, lE)));
         let range = lMax - lMin;
         if (range < max(0.0312, lMax * 0.125)) { return base; }
         let lNW = lum(textureSampleLevel(src, s, i.uv + vec2f(-t.x, -t.y), 0.0).rgb);
@@ -687,6 +688,7 @@ export class Renderer {
     // 움직이는 동안은 한 장 + FXAA. n = 쌓인 장 수, stillFrames = 장면이 안 바뀐 연속 프레임 수
     this.n = 0; this.stillFrames = 0; this.prevKey = new Float32Array(this.u.length); this.prevVer = '';
     this.forceMoving = false;     // 테스트용: 늘 움직이는 중으로
+    this.fxaaOff = false;         // 테스트용: FXAA 끄기 (전후 비교)
     this.cur = 0;
     const rgba16 = 'rgba16float';
     const fsq = /* wgsl */`
@@ -710,16 +712,17 @@ export class Renderer {
       @fragment fn fs(i: O) -> @location(0) vec4f { return textureLoad(src, vec2i(i.p.xy), 0); }` });
     this.copyPipe = device.createRenderPipeline({ layout: 'auto', vertex: { module: copyMod, entryPoint: 'vs' },
       fragment: { module: copyMod, entryPoint: 'fs', targets: [{ format }] },
-      depthStencil: { format: 'depth24plus', depthWriteEnabled: false, depthCompare: 'always' } });
+      depthStencil: { format: 'depth32float', depthWriteEnabled: false, depthCompare: 'always' } });
     this.abuf = device.createBuffer({ size: 16, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
     this.bbuf = device.createBuffer({ size: 16, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
   }
 
   resize(w, h) {
     if (this.depthTex && this.depthTex.width === w && this.depthTex.height === h) return;
-    for (const t of [this.depthTex, this.sceneTex, this.marchTex, ...(this.accTex || [])]) t?.destroy();
+    for (const t of [this.depthTex, this.marchDepth, this.sceneTex, this.marchTex, ...(this.accTex || [])]) t?.destroy();
     const dev = this.device, RT = GPUTextureUsage.RENDER_ATTACHMENT, TB = GPUTextureUsage.TEXTURE_BINDING;
-    this.depthTex = dev.createTexture({ size: [w, h], format: 'depth24plus', usage: RT });
+    this.marchDepth = dev.createTexture({ size: [w, h], format: 'depth32float', usage: RT | GPUTextureUsage.COPY_SRC });   // 비누 깊이 (쌓는 동안만 새로 씀)
+    this.depthTex = dev.createTexture({ size: [w, h], format: 'depth32float', usage: RT | GPUTextureUsage.COPY_DST });     // 매 프레임 = 비누 깊이 복사 + 칩·칼·덩어리
     this.sceneTex = dev.createTexture({ size: [w, h], format: this.format, usage: RT | TB });
     this.marchTex = dev.createTexture({ size: [w, h], format: this.format, usage: RT | TB });   // 이번 장 (비누·배경만)
     this.accTex = [0, 1].map(() => dev.createTexture({ size: [w, h], format: 'rgba16float', usage: RT | TB }));  // 쌓은 평균 (번갈아 씀)
@@ -778,6 +781,17 @@ export class Renderer {
     u.set([0, 0, sl ? 1 : 0, 0], 80);
     u.set(sl ? [...sl.n, sl.w] : [0, 0, 0, 0], 84);
     u.set([...this.look.base, this.look.id], 88);
+    // 장면이 그대로인가: 비누를 그리는 데 쓰는 값(카메라·도구 표시·자르기·종류 …) + 비누·물 텍스처 판.
+    // 시간(u[51])과 뷰포트 크기(u[76], u[77])는 뺀다: 가만히 → 원래 해상도로 바꾸는 것 자체가 '바뀜'이 되면 둘 사이를 오갔다
+    // (크기가 바뀌면 resize가 쌓은 장을 따로 비운다)
+    const ver = `${sdf.version}|${this.water.version}`;
+    let changed = this.forceMoving || ver !== this.prevVer;
+    if (!changed) for (let i = 0; i < 92; i++) if (i !== 51 && i !== 76 && i !== 77 && u[i] !== this.prevKey[i]) { changed = true; break; }
+    this.prevKey.set(u); this.prevVer = ver;
+    if (changed) { this.n = 0; this.stillFrames = 0; } else this.stillFrames++;
+    const marchNow = this.n < ACC_MAX;
+    // 첫 장은 흔들지 않고, 그 다음부터 할턴 수열로 픽셀 안을 고르게 훑는다
+    u.set(this.n === 0 ? [0, 0, 0, 0] : [halton(this.n, 2) - 0.5, halton(this.n, 3) - 0.5, 0, 0], 92);
     device.queue.writeBuffer(this.ubuf, 0, u);
     const pv = this.preview;
     if (pv) {
@@ -789,14 +803,30 @@ export class Renderer {
       pu.set([0, 0, 0, 0], 68);
       pu.set([pv.w, pv.h, 0, 1], 76);
       pu.set([pv.x, pv.y, 0, 0], 80);   // 미리보기에선 자르기 표시 끔
+      pu.set([0, 0, 0, 0], 92);
       device.queue.writeBuffer(this.pbuf, 0, pu);
     }
 
     const enc = device.createCommandEncoder();
+    if (marchNow) {
+      // 1) 비누·배경 한 장 (+ 깊이)
+      const p1 = enc.beginRenderPass({
+        colorAttachments: [{ view: this.marchTex.createView(), loadOp: 'clear', storeOp: 'store', clearValue: [0, 0, 0, 1] }],
+        depthStencilAttachment: { view: this.marchDepth.createView(), depthLoadOp: 'clear', depthStoreOp: 'store', depthClearValue: 1 } });
+      p1.setPipeline(this.marchPipe); p1.setBindGroup(0, this.marchBG); p1.draw(3); p1.end();
+      // 2) 평균에 더하기: 새 장의 무게 1/(n+1)
+      device.queue.writeBuffer(this.abuf, 0, new Float32Array([1 / (this.n + 1), 0, 0, 0]));
+      const nxt = this.cur ^ 1;
+      const p2 = enc.beginRenderPass({ colorAttachments: [{ view: this.accTex[nxt].createView(), loadOp: 'clear', storeOp: 'store' }] });
+      p2.setPipeline(this.accPipe); p2.setBindGroup(0, this.accBG[this.cur]); p2.draw(3); p2.end();
+      this.cur = nxt; this.n++;
+    }
+    enc.copyTextureToTexture({ texture: this.marchDepth }, { texture: this.depthTex }, this.size);
+    // 3) 쌓은 비누 + 움직이는 것들(덩어리·칩·칼)은 매 프레임 그 위에
     const pass = enc.beginRenderPass({
       colorAttachments: [{ view: this.sceneTex.createView(), loadOp: 'clear', storeOp: 'store', clearValue: [0, 0, 0, 1] }],
-      depthStencilAttachment: { view: this.depthTex.createView(), depthLoadOp: 'clear', depthStoreOp: 'store', depthClearValue: 1 } });
-    pass.setPipeline(this.marchPipe); pass.setBindGroup(0, this.marchBG); pass.draw(3);
+      depthStencilAttachment: { view: this.depthTex.createView(), depthLoadOp: 'load', depthStoreOp: 'store' } });
+    pass.setPipeline(this.copyPipe); pass.setBindGroup(0, this.copyBG[this.cur]); pass.draw(3);
     pass.setBindGroup(0, this.meshBG);
     const drawChips = () => {
       pass.setVertexBuffer(0, this.chipVB); pass.setIndexBuffer(this.chipIB, 'uint16');
@@ -820,10 +850,15 @@ export class Renderer {
     pass.end();
     // 화면 크기로 늘려 붙이기
     const out = enc.beginRenderPass({ colorAttachments: [{ view: this.ctx.getCurrentTexture().createView(), loadOp: 'clear', storeOp: 'store', clearValue: [0, 0, 0, 1] }] });
+    // 4) 화면으로: 쌓인 장이 적을 때(움직이는 중)만 FXAA
+    device.queue.writeBuffer(this.bbuf, 0, new Float32Array([1 / this.size[0], 1 / this.size[1], this.fxaaOff ? 0 : this.n <= 2 ? 1 : this.n < 4 ? 0.5 : 0, 0]));
     out.setPipeline(this.blitPipe); out.setBindGroup(0, this.blitBG); out.draw(3); out.end();
     device.queue.submit([enc.finish()]);
   }
 }
+
+const ACC_MAX = 16;   // 가만히 있을 때 쌓는 장 수 (다 쌓이면 비누는 더 안 그린다)
+function halton(i, b) { let f = 1, r = 0; while (i > 0) { f /= b; r += f * (i % b); i = Math.floor(i / b); } return r; }
 
 function previewCam(a, aspect) {
   const eye = [Math.sin(a) * 11 * 0.82, 6.5, Math.cos(a) * 11 * 0.82];

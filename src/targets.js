@@ -65,13 +65,14 @@ export function buildTarget(sdf, key) {
 
 // 채점: 허용 오차 tol(cm) 바깥만 센다.
 //  남은 군살 = 비누 안 && 목표 밖(tol 이상), 과하게 깎음 = 비누 밖 && 목표 안(tol 이상)
-export function score(sdf, tgt, tol = 0.08) {
-  let excess = 0, over = 0, inside = 0;
+//  두꺼운 군살 = 남은 군살 중 목표에서 thick(cm) 넘게 떨어진 것 — 덩어리처럼 보이는 테두리 (복셀 수)
+export function score(sdf, tgt, tol = 0.08, thickTol = 0.3) {
+  let excess = 0, over = 0, inside = 0, thick = 0;
   const d = sdf.d;
   for (let i = 0; i < d.length; i++) {
     const t = tgt[i];
     if (t < -tol) { inside++; if (d[i] > 0) over++; }
-    else if (t > tol && d[i] < 0) excess++;
+    else if (t > tol && d[i] < 0) { excess++; if (t > thickTol) thick++; }
   }
-  return { excess, over, inside };
+  return { excess, over, inside, thick };
 }

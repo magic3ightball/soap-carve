@@ -31,6 +31,7 @@ export class SoapSDF {
       usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST });
     this.setTarget(null);
     this.dirty = null;
+    this.version = 0;                          // GPU로 올릴 때마다 +1 (그리는 쪽이 '장면이 바뀌었나' 판단)
     this.reset();
   }
 
@@ -40,6 +41,7 @@ export class SoapSDF {
     else out.fill(f16(9));
     const [nx, ny, nz] = this.dims;
     this.device.queue.writeTexture({ texture: this.tgtTex }, out, { bytesPerRow: nx * 2, rowsPerImage: ny }, this.dims);
+    this.version = (this.version || 0) + 1;
   }
 
   reset() {
@@ -271,6 +273,10 @@ export class SoapSDF {
     const d = this.dirty;
     this.dirty = d ? [Math.min(d[0], i0), Math.min(d[1], j0), Math.min(d[2], k0), Math.max(d[3], i1), Math.max(d[4], j1), Math.max(d[5], k1)]
       : [i0, j0, k0, i1, j1, k1];
+    // 획이 끝날 때까지 바뀐 범위 (chunks.dropSlivers가 이 안만 0.5 mm로 다시 검사하고 비운다)
+    const t = this.touched;
+    this.touched = t ? [Math.min(t[0], i0), Math.min(t[1], j0), Math.min(t[2], k0), Math.max(t[3], i1), Math.max(t[4], j1), Math.max(t[5], k1)]
+      : [i0, j0, k0, i1, j1, k1];
   }
 
   // 깎인 깊이 amount(cm)만큼 뿌옇게 (더 옅게는 안 바꾼다)
@@ -303,6 +309,7 @@ export class SoapSDF {
     this.device.queue.writeTexture({ texture: this.covTex, origin: [i0, j0, k0] }, cv,
       { bytesPerRow: sx, rowsPerImage: sy }, [sx, sy, sz]);
     this.dirty = null;
+    this.version++;
   }
 
   // 남은 비누 부피 (cm³) — 테스트용

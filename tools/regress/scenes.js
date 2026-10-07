@@ -1,6 +1,7 @@
 // 고정 장면 회귀 검사: 같은 깎기·물·자르기를 매번 똑같이 재현해 캡처한다.
 // 사용: 수신기(recv.py)를 켜고 http://127.0.0.1:8933/?regress=<이름> 을 연다 → out/<이름>/<장면>.png
 // 끝나면 document.title이 'regress done N'으로 바뀐다. 비교는 compare.py.
+// 장면 그림은 '가만히 있을 때'(여러 장 쌓은 것), cross_top_moving은 '움직이는 중'(반 해상도 + FXAA).
 const RECV = 'http://127.0.0.1:8941';
 
 // 장면마다 같은 난수열 (칼끝 부스러짐 등이 Math.random을 쓴다)
@@ -63,13 +64,24 @@ export async function run(C, label) {
   Object.assign(cv.style, { width: '960px', height: '640px', inset: 'auto', left: '0', top: '0' });
   await new Promise(r => setTimeout(r, 300));
   let n = 0;
-  for (const [name, fn] of Object.entries(SCENES)) {
-    fn(C);
-    C.st.cursor = null; C.st.hover = null; C.renderScale = 1;
-    C.frame(1 / 60); C.frame(1 / 60);
+  const shoot = async name => {
     const url = cv.toDataURL('image/png');                     // 같은 작업 안에서 읽어야 WebGPU 캔버스가 비어 있지 않다
     await fetch(`${RECV}/${label}/${name}`, { method: 'POST', body: url });
     n++;
+  };
+  // 가만히 있을 때 보이는 그림: 여러 장이 다 쌓일 때까지 (6프레임 대기 + 16장)
+  for (const [name, fn] of Object.entries(SCENES)) {
+    fn(C);
+    C.st.cursor = null; C.st.hover = null; C.renderScale = 1;
+    for (let i = 0; i < 26; i++) C.frame(1 / 60);
+    await shoot(name);
+    if (name === 'cross_top') {
+      // 같은 상태로 '움직이는 중' 그림: 반 해상도 한 장 + FXAA (장면을 다시 깎으면 칼 방향 등 남은 상태 때문에 달라진다)
+      C.renderer.forceMoving = true; C.renderScale = 0.5;
+      C.frame(1 / 60); C.frame(1 / 60);
+      await shoot('cross_top_moving');
+      C.renderer.forceMoving = false; C.renderScale = 1;
+    }
   }
   document.title = `regress done ${n}`;
 }
