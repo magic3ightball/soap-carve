@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>비누 조각</title>
+<style>
+  :root { --fg:#ece8ef; --mute:#a59fab; --acc:#ff9a6b; --panel:rgba(24,22,27,.78); }
+  html, body { margin:0; height:100%; background:#141317; color:var(--fg); overflow:hidden;
+    font:13px/1.4 -apple-system, BlinkMacSystemFont, "Apple SD Gothic Neo", sans-serif; user-select:none; -webkit-user-select:none; }
+  canvas { position:fixed; inset:0; width:100%; height:100%; display:block; touch-action:none; cursor:crosshair; }
+  #hud { position:fixed; top:14px; left:14px; padding:10px 12px; background:var(--panel); border-radius:10px;
+    backdrop-filter:blur(8px); -webkit-backdrop-filter:blur(8px); min-width:150px; }
+  #hud .row { display:flex; justify-content:space-between; gap:14px; }
+  #hud .row span { color:var(--mute); }
+  #hud .btns { display:flex; gap:6px; margin-top:8px; flex-wrap:wrap; }
+  button { background:#2c2a31; color:var(--fg); border:1px solid #3d3a44; border-radius:7px; padding:5px 9px; font:inherit; cursor:pointer; }
+  button:hover { background:#38353e; }
+  #keys { position:fixed; left:14px; bottom:14px; color:var(--mute); font-size:12px; background:var(--panel);
+    padding:8px 11px; border-radius:10px; line-height:1.6; }
+  #keys b { color:var(--fg); font-weight:500; }
+  #hint { position:fixed; top:18px; left:0; right:0; text-align:center; color:var(--fg); pointer-events:none;
+    transition:opacity .8s; text-shadow:0 1px 6px #000; }
+  .seg { display:flex; gap:4px; margin-top:8px; }
+  .seg button { flex:1; }
+  button.on { background:#5a4766; border-color:#8a6fa0; }
+  button:disabled { opacity:.4; cursor:default; }
+  #prog { display:none; margin-top:8px; }
+  #prog .bar { height:5px; background:#3a3640; border-radius:3px; margin-top:5px; overflow:hidden; }
+  #prog .bar i { display:block; height:100%; width:0; background:linear-gradient(90deg,#9fdcb0,#7cc79a); transition:width .3s; }
+  #o_val.warn { color:#ff8c80; }
+  #pv { display:none; position:fixed; top:14px; right:14px; width:220px; pointer-events:none; }
+  #pv_box { width:220px; height:150px; border-radius:10px; }
+  #pv_name { text-align:center; color:var(--mute); margin-top:5px; font-size:12px; }
+  #legend { color:var(--mute); font-size:11.5px; margin-top:6px; line-height:1.5; }
+  #legend i { display:inline-block; width:9px; height:9px; border-radius:2px; margin-right:4px; vertical-align:-1px; }
+  #toast { position:fixed; left:50%; top:60px; transform:translateX(-50%); background:rgba(40,34,48,.92); padding:10px 16px;
+    border-radius:10px; opacity:0; transition:opacity .6s; pointer-events:none; font-size:14px; }
+  #sndlab { position:fixed; right:14px; bottom:14px; background:var(--panel); padding:10px 12px; border-radius:10px; width:250px; font-size:12px; }
+  #sndlab label { display:grid; grid-template-columns:70px 1fr 48px; gap:6px; align-items:center; margin-top:4px; }
+  #sndlab i { font-style:normal; color:var(--mute); text-align:right; }
+  #sndlab button { margin-top:8px; }
+  #looks { display:flex; gap:6px; margin-top:5px; }
+  #looks button { width:26px; height:26px; padding:0; border-radius:50%; border:2px solid #3d3a44; }
+  #looks button.on { border-color:#fff; }
+  #err { position:fixed; inset:0; display:none; align-items:center; justify-content:center; padding:24px; text-align:center; white-space:pre-wrap; }
+</style>
+</head>
+<body>
+<canvas id="cv"></canvas>
+<svg id="ov" style="position:fixed;inset:0;width:100%;height:100%;pointer-events:none"><line id="sline" stroke="#fff3e0" stroke-width="2" stroke-dasharray="6 5" stroke-linecap="round" style="display:none"/></svg>
+<div id="hud">
+  <div class="seg" style="margin-top:0;margin-bottom:8px;display:grid;grid-template-columns:1fr 1fr"><button data-tool="knife" class="on">칼 (1)</button><button data-tool="slice">자르기 (2)</button><button data-tool="sand">물 묻히기 (3)</button><button data-tool="gouge">U자 끌 (4)</button></div>
+  <div class="row"><span id="hud_depth_l">깊이</span><b id="hud_depth"></b></div>
+  <div class="row"><span>칼 기울기</span><b id="hud_tilt"></b></div>
+  <div class="btns"><button id="b_undo">되돌리기</button><button id="b_clear">부스러기 치우기</button><button id="b_new">새 비누</button><button id="b_mute">소리 켜짐 (M)</button></div>
+  <div class="row" style="margin-top:8px"><span>비누</span><b id="look_name"></b></div>
+  <div id="looks"></div>
+  <div class="seg"><button data-t="" class="on">자유 조각</button><button data-t="fish">물고기</button><button data-t="rabbit">토끼</button></div>
+  <div id="prog">
+    <div class="row"><span>진행</span><b id="p_val">0%</b></div>
+    <div class="row"><span>너무 깎음</span><b id="o_val">0%</b></div>
+    <div class="bar"><i id="p_bar"></i></div>
+    <div class="btns"><button id="b_guide">가이드 (G)</button></div>
+    <div id="legend"><i style="background:#c98a6a"></i>더 깎을 곳 · 줄 하나 2 mm<br><i style="background:#7fc796"></i>거의 다 됨 <i style="background:#e5524c;margin-left:6px"></i>너무 깎음</div>
+  </div>
+</div>
+<div id="pv"><div id="pv_box"></div><div id="pv_name"></div></div>
+<div id="toast"></div>
+<div id="keys">
+  <span id="keys_knife"><b>비누 위 드래그</b> 깎기 · <b>빈 곳 드래그</b> 돌려 보기 · <b>핀치</b> 확대<br>
+  <b>두 손가락 스크롤</b> 깊이 · <b>Q / E</b> 칼 기울기 · <b>⌘Z</b> 되돌리기 · <b>C</b> 부스러기 치우기<br>
+  <b>스페이스+드래그</b> 돌려 보기 · <b>⌥+드래그</b> 화면 옮기기</span>
+  <span id="keys_slice" style="display:none"><b>드래그로 선 긋기</b> 그 선을 따라 잘라 작은 쪽을 떼어 냄 (붉은 쪽)<br>
+  <b>두 손가락 스크롤</b>·<b>스페이스+드래그</b> 돌려 보기 · <b>⌥+드래그</b> 화면 옮기기 · <b>핀치</b> 확대 · <b>⌘Z</b> 되돌리기</span>
+  <span id="keys_sand" style="display:none"><b>비누 위 문지르기</b> 젖은 곳의 모서리·턱이 녹아 둥글어짐 (오목한 곳은 안 채움) · <b>빈 곳 드래그</b> 돌려 보기<br>
+  <b>두 손가락 스크롤</b> 물 범위 · <b>핀치</b> 확대 · <b>⌘Z</b> 되돌리기 · <b>스페이스+드래그</b> 돌려 보기 · <b>⌥+드래그</b> 화면 옮기기</span>
+</div>
+<div id="hint">비누 위에서 드래그해 깎아 보세요</div>
+<div id="err"></div>
+<script type="module" src="src/main.js"></script>
+</body>
+</html>
