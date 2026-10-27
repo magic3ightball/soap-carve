@@ -399,6 +399,7 @@ const LOOKS = [
   { id: 7, name: '모양 품은 비누', base: [0.90, 0.97, 0.98], sw: 'radial-gradient(ellipse 40% 26% at 50% 55%,#ff9e85 0 90%,transparent 100%),linear-gradient(135deg,rgba(225,250,250,.95),rgba(170,220,225,.7))' },
   { id: 1, name: '젤리 층', base: [0.96, 0.78, 0.84], sw: 'linear-gradient(160deg,#f7b9cc 0 25%,#f4f2fb 25% 50%,#a9e8d2 50% 75%,#ffe39a 75%)' },
   { id: 2, name: '꿀 벌집', base: [0.96, 0.66, 0.24], sw: 'radial-gradient(circle at 35% 35%,#ffe0a0,#e8932a)' },
+  { id: 8, name: '스크래치', base: [0.93, 0.91, 0.86], sw: 'linear-gradient(150deg,#16151b 0 30%,#ff9a6b 30% 36%,#16151b 36% 55%,#5fd0dc 55% 60%,#16151b 60% 78%,#ffd75e 78% 82%,#16151b 82%)' },
   { id: 6, name: '반짝이', base: [0.97, 0.84, 0.92], sw: 'radial-gradient(circle at 30% 35%,#fff 0 5%,transparent 6%),radial-gradient(circle at 65% 60%,#ffd27a 0 5%,transparent 6%),radial-gradient(circle at 45% 75%,#ffb3dc 0 4%,transparent 5%),linear-gradient(135deg,#f6d6e8,#e7c2dc)' },
 ];
 let lookId = 7;
@@ -542,7 +543,8 @@ if (playLabel) import('../tools/regress/playtest.js').then(m => m.run(window.car
 // ?debug: 소리 다듬기 패널 (귀로 맞춘 값은 '값 복사'로 가져다 SOUND_DEFAULTS에 넣는다)
 if (new URLSearchParams(location.search).has('debug')) {
   const R = { master: [0, 1.5, 0.01], burstVol: [0.001, 0.03, 0.0005], grains: [1, 14, 1], burstMs: [5, 120, 1], freq: [800, 8000, 50],
-    q: [0.3, 8, 0.1], decayMs: [2, 40, 1], crisp: [0, 1, 0.05], scrape: [0, 0.6, 0.01], width: [0, 1, 0.05], room: [0, 0.6, 0.01] };
+    q: [0.3, 8, 0.1], decayMs: [2, 40, 1], crisp: [0, 1, 0.05], scrape: [0, 0.6, 0.01], width: [0, 1, 0.05], room: [0, 0.6, 0.01],
+    rec: [0, 3, 0.05], synth: [0, 1, 0.05], grainMs: [20, 250, 5] };
   const box = document.createElement('div');
   box.id = 'sndlab';
   box.innerHTML = '<b>소리 다듬기</b>';
@@ -553,6 +555,12 @@ if (new URLSearchParams(location.search).has('debug')) {
     row.querySelector('input').oninput = e => { sound.P[k] = +e.target.value; row.querySelector('i').textContent = e.target.value; sound.applyParams(); };
     box.appendChild(row);
   }
+  // 불러온 녹음 개수 (첫 클릭 뒤에 불러온다)
+  const recInfo = document.createElement('small');
+  recInfo.style.display = 'block';
+  const showRec = () => { const c = Object.entries(sound.bank.counts()); recInfo.textContent = '녹음: ' + (c.length ? c.map(([k, n]) => `${k} ${n}`).join(', ') : '없음 (합성음)'); };
+  showRec(); setInterval(showRec, 1000);
+  box.appendChild(recInfo);
   const btn = document.createElement('button');
   btn.textContent = '값 복사';
   btn.onclick = () => navigator.clipboard?.writeText(JSON.stringify(sound.P, null, 2));

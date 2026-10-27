@@ -1,6 +1,9 @@
 // 소리 (Web Audio 합성, ASMR 쪽으로 가깝고 바삭하게, 이어폰 기준 스테레오)
 //  깎기 = 깎인 부피가 쌓일 때마다 "사각" 한 번(짧은 잡음 알갱이 여러 개의 묶음) + 칼이 미끄러지는 "쓱" 바탕음
 //  칩 떨어짐 "톡", 칩·덩어리 부딪힘 "톡/쿵", 덩어리 자르기 "썩"
+//  sounds/에 녹음이 있으면 그 종류는 녹음을 쓴다 (언제 몇 번 나는지는 그대로, 재료만 바뀜). 없으면 합성음
+import { SampleBank, GrainLoop } from './samples.js';
+
 export const SOUND_DEFAULTS = {
   master: 0.85,       // 전체 음량
   burstVol: 0.006,    // "사각" 한 번에 해당하는 깎인 부피 (cm³). 작을수록 촘촘
@@ -13,7 +16,13 @@ export const SOUND_DEFAULTS = {
   scrape: 0.18,       // 칼이 미끄러지는 바탕음 크기
   width: 0.35,        // 좌우 퍼짐 (칼 위치 따라감)
   room: 0.12,         // 작은 방 울림
+  rec: 1,             // 녹음 전체 음량
+  synth: 0.25,        // 녹음이 있을 때 위에 얹는 합성음 양 (0 = 녹음만)
+  grainMs: 90,        // 바탕음 녹음을 잘라 겹치는 조각 길이
 };
+
+// 종류별 녹음 음량 (녹음마다 크기가 달라서 귀로 맞춘다)
+export const SAMPLE_GAIN = { cut_thin: 1, cut_deep: 1, scrape: 1, sand: 0.6, sand_loop: 1, chip: 1, hit_big: 1, slice: 1, drip: 0.8 };
 
 export class Sound {
   constructor(ctxFactory = () => new (window.AudioContext || window.webkitAudioContext)()) {
@@ -24,14 +33,15 @@ export class Sound {
     this.acc = 0;                // 아직 소리로 안 나간 깎인 부피
     this.pan = 0;
     this.depth = 0.08;
-    this.stats = { bursts: 0, grains: 0, hits: 0 };
+    this.stats = { bursts: 0, grains: 0, hits: 0, samples: 0 };
+    this.bank = new SampleBank();
   }
 
   now() { return this.clock ?? this.ctx.currentTime; }   // 테스트(오프라인 렌더)에서 clock으로 시간을 넘긴다
 
   // 브라우저 정책상 첫 클릭·키 입력 때 만든다
   unlock() {
-    if (!this.ctx) this.build(this.ctxFactory());
+    if (!this.ctx) { this.build(this.ctxFactory()); this.bank.load(this.ctx); }
     if (this.ctx.state === 'suspended') this.ctx.resume();
   }
 
@@ -61,6 +71,25 @@ export class Sound {
     this.scrapeP = ctx.createStereoPanner();
     src.connect(this.scrapeF).connect(this.scrapeG).connect(this.scrapeP).connect(this.bus);
     src.start();
+    // 녹음 바탕음: 조각 재생 → 밝기(저역 통과, 깊이 따라) → 같은 좌우
+    this.loopF = ctx.createBiquadFilter(); this.loopF.type = 'lowpass'; this.loopF.frequency.value = 12000; this.loopF.Q.value = 0.5;
+    this.loopF.connect(this.scrapeP);
+    this.loop = new GrainLoop(ctx, this.loopF);
+  }
+
+  // 녹음 한 번: 같은 파일이라도 음높이·크기를 살짝 바꿔 매번 다르게. 녹음이 없으면 false → 합성음
+  playSample(kind, t, amp, pan, rate = 1) {
+    const b = this.bank.pick(kind);
+    if (!b) return false;
+    const ctx = this.ctx;
+    const s = ctx.createBufferSource(); s.buffer = b;
+    s.playbackRate.value = rate * (0.9 + Math.random() * 0.22);
+    const g = ctx.createGain(); g.gain.value = amp * (0.8 + Math.random() * 0.4) * this.P.rec * (SAMPLE_GAIN[kind] ?? 1);
+    const p = ctx.createStereoPanner(); p.pan.value = Math.max(-1, Math.min(1, pan));
+    s.connect(g).connect(p); p.connect(this.bus); p.connect(this.verb);
+    s.start(t);
+    this.stats.samples++;
+    return true;
   }
 
   setMuted(m) {
@@ -110,10 +139,17 @@ export class Sound {
       const thin = 1 - Math.min(1, depth / 0.4);
       const fc = P.freq * (0.45 + 0.55 * thin) * (0.8 + Math.random() * 0.4);
       const amp = 0.36 * Math.sqrt(unit / P.burstVol) * (0.75 + Math.random() * 0.5);
-      const k = Math.max(2, Math.round(P.grains * (0.7 + Math.random() * 0.6)));
-      for (let i = 0; i < k; i++) {
-        const tt = t + Math.random() * P.burstMs / 1000;
-        this.grain(tt, fc * (0.75 + Math.random() * 0.5), amp * (0.6 + Math.random() * 0.4), pan + (Math.random() - 0.5) * P.width);
+      // 녹음: 얇을수록 cut_thin을 고를 확률이 크다 (중간 깊이에선 둘이 섞임). 녹음 한 번이 이미 알갱이 묶음이다
+      const kind = Math.random() < thin ? 'cut_thin' : 'cut_deep';
+      const rec = this.playSample(this.bank.has(kind) ? kind : kind === 'cut_thin' ? 'cut_deep' : 'cut_thin',
+        t, amp, pan + (Math.random() - 0.5) * P.width, 0.96 + 0.08 * thin);
+      const ga = rec ? amp * P.synth : amp;
+      if (ga > 0) {
+        const k = Math.max(2, Math.round(P.grains * (0.7 + Math.random() * 0.6)));
+        for (let i = 0; i < k; i++) {
+          const tt = t + Math.random() * P.burstMs / 1000;
+          this.grain(tt, fc * (0.75 + Math.random() * 0.5), ga * (0.6 + Math.random() * 0.4), pan + (Math.random() - 0.5) * P.width);
+        }
       }
       t += P.burstMs / 1000 * (0.5 + Math.random() * 0.4);
       this.stats.bursts++;
@@ -129,7 +165,11 @@ export class Sound {
     const unit = 0.0006, t = this.now() + 0.005;
     for (let n = 0; this.sandAcc >= unit && n < 8; n++) {
       this.sandAcc -= unit;
-      this.grain(t + Math.random() * 0.016, 5200 + Math.random() * 2600, 0.09 + Math.random() * 0.06, pan + (Math.random() - 0.5) * this.P.width);
+      const tt = t + Math.random() * 0.016, pp = pan + (Math.random() - 0.5) * this.P.width;
+      // 짧은 녹음은 알갱이보다 길어서 몇 번에 한 번만
+      if (this.bank.has('sand') && Math.random() < 0.25) this.playSample('sand', tt, 0.5, pp);
+      const ga = this.bank.has('sand') ? this.P.synth : 1;
+      if (ga > 0) this.grain(tt, 5200 + Math.random() * 2600, (0.09 + Math.random() * 0.06) * ga, pp);
     }
     this.sandAcc = Math.min(this.sandAcc, unit * 20);
   }
@@ -139,17 +179,26 @@ export class Sound {
   update(cutting, speed, sanding = false, area = 0) {
     if (!this.ctx) return;
     const t = this.now(), P = this.P;
+    // 바탕음 크기는 합성·녹음 공통. 녹음이 있으면 합성 쪽은 synth만큼만 남긴다
+    let lvl, kind, tau;
     if (sanding) {
-      this.scrapeG.gain.setTargetAtTime(P.scrape * 1.4 * (this.sandLvl || 0), t, 0.04);
-      this.scrapeP.pan.setTargetAtTime(this.pan * P.width * 2, t, 0.05);
+      lvl = P.scrape * 1.4 * (this.sandLvl || 0); kind = 'sand_loop'; tau = 0.04;
       this.scrapeF.frequency.setTargetAtTime(4200, t, 0.05);
-      return;
+      this.loopF.frequency.setTargetAtTime(12000, t, 0.05);
+    } else {
+      this.sandLvl = 0;
+      lvl = cutting ? P.scrape * Math.min(1, speed / 8) * (0.5 + this.depth * 3) * Math.sqrt(Math.min(1, area / 0.012)) : 0;
+      kind = 'scrape'; tau = 0.03;
+      const thin = 1 - Math.min(1, this.depth / 0.4);
+      this.scrapeF.frequency.setTargetAtTime(900 + 2200 * thin, t, 0.05);
+      this.loopF.frequency.setTargetAtTime(3000 + 9000 * thin, t, 0.05);      // 깊게 깎으면 어둡게
     }
-    this.sandLvl = 0;
-    const lvl = cutting ? P.scrape * Math.min(1, speed / 8) * (0.5 + this.depth * 3) * Math.sqrt(Math.min(1, area / 0.012)) : 0;
-    this.scrapeG.gain.setTargetAtTime(lvl, t, 0.03);
+    const buf = this.bank.pick(kind);
+    // 녹음 바탕음은 합성 잡음보다 훨씬 크게 들어 있으므로 따로 곱한다 (P.scrape 기본 0.18 기준 → 녹음 1배)
+    this.loop.out.gain.setTargetAtTime(buf ? lvl / 0.18 * P.rec * (SAMPLE_GAIN[kind] ?? 1) * 0.5 : 0, t, tau);
+    this.loop.tick(t, buf, buf && lvl > 1e-4, P.grainMs, sanding ? 1 : 0.92 + 0.16 * Math.min(1, speed / 8));
+    this.scrapeG.gain.setTargetAtTime(buf ? lvl * P.synth : lvl, t, tau);
     this.scrapeP.pan.setTargetAtTime(this.pan * P.width * 2, t, 0.05);
-    this.scrapeF.frequency.setTargetAtTime(900 + 2200 * (1 - Math.min(1, this.depth / 0.4)), t, 0.05);
   }
 
   // 짧은 "톡"/"쿵": 높은 톡(잡음) + 낮은 몸통(사인)
@@ -173,6 +222,7 @@ export class Sound {
   drip(pan) {
     if (!this.ctx) return;
     const ctx = this.ctx, t = this.now() + 0.005;
+    if (this.playSample('drip', t, 0.5, pan)) return;
     const p = ctx.createStereoPanner(); p.pan.value = pan; p.connect(this.bus); p.connect(this.verb);
     const o = ctx.createOscillator(), f0 = 900 + Math.random() * 500;
     o.frequency.setValueAtTime(f0, t); o.frequency.exponentialRampToValueAtTime(f0 * 2.2, t + 0.05);
@@ -181,14 +231,15 @@ export class Sound {
     o.connect(g).connect(p); o.start(t); o.stop(t + 0.1);
   }
 
-  chipOff(pan) { if (this.ctx) this.knock(this.now() + 0.01, 0.25, 2400, 0, 0, pan); }
+  chipOff(pan) { if (this.ctx && !this.playSample('chip', this.now() + 0.01, 0.25, pan)) this.knock(this.now() + 0.01, 0.25, 2400, 0, 0, pan); }
 
   // 부딪힘: v = 접근 속도 (cm/s), big = 덩어리면 true
   hit(v, big, pan) {
     if (!this.ctx) return;
     const a = Math.min(1, v / 120);
-    if (big) this.knock(this.now() + 0.005, 0.7 * a + 0.2, 1100, 140, 0.16, pan);
-    else this.knock(this.now() + 0.005, 0.3 * a + 0.06, 3200 + Math.random() * 1500, 0, 0, pan);
+    const t = this.now() + 0.005;
+    if (big) { if (!this.playSample('hit_big', t, 0.7 * a + 0.2, pan)) this.knock(t, 0.7 * a + 0.2, 1100, 140, 0.16, pan); }
+    else if (!this.playSample('chip', t, 0.3 * a + 0.06, pan, 1.05)) this.knock(t, 0.3 * a + 0.06, 3200 + Math.random() * 1500, 0, 0, pan);
     this.stats.hits++;
   }
 
@@ -196,6 +247,7 @@ export class Sound {
   slice(vol, pan) {
     if (!this.ctx) return;
     const ctx = this.ctx, t = this.now() + 0.005, dur = 0.16 + Math.min(0.15, vol * 0.01);
+    if (this.playSample('slice', t, 0.8 + Math.min(0.4, vol * 0.02), pan)) return;
     const p = ctx.createStereoPanner(); p.pan.value = pan;
     p.connect(this.bus); p.connect(this.verb);
     const s = ctx.createBufferSource(); s.buffer = this.noise;

@@ -108,6 +108,81 @@ fn medium(q: vec3f, H: vec3f, id: i32) -> vec4f {
   if (fl.a > 0.0) { return fl; }
   return vec4f(0.98, 0.84, 0.92, 0.012);
 }
+
+// ── 8 스크래치 비누: 0.1 mm 검은 막 아래 3 mm 그림 층, 그 아래는 흰 비누 ──
+// 깊이는 처음 비누 상자(sdf.js SOAP)에서 잰다 → 얇게 긁기만 해도 그림이 드러나고, 깊게 파면 흰 속살.
+fn aa(d: f32) -> f32 { return 1.0 - smoothstep(-0.012, 0.012, d); }        // 2D 거리(cm) → 칠할 양
+fn star(p: vec2f, r: f32) -> f32 { let a = abs(p); return aa(min(a.x * 0.3 + a.y, a.x + a.y * 0.3) - r); }
+// 윗면 그림: 노을 바다 (위쪽 = 비누 안쪽 -z). 해·별·물결·해 그림자·물고기
+fn picTop(u: vec2f) -> vec3f {
+  let hz = 0.25 + 0.06 * sin(u.x * 1.7);
+  var c: vec3f;
+  if (u.y > hz) {
+    let t = (u.y - hz) / 2.3;
+    c = mix(vec3f(1.0, 0.62, 0.30), vec3f(0.96, 0.42, 0.62), smoothstep(0.0, 0.45, t));
+    c = mix(c, vec3f(0.36, 0.26, 0.66), smoothstep(0.45, 1.0, t));
+    let sd = length(u - vec2f(1.7, hz + 0.75));
+    c += vec3f(1.0, 0.7, 0.3) * 0.35 * exp(-sd * 1.6);                   // 해무리
+    c = mix(c, vec3f(1.0, 0.88, 0.42), aa(sd - 0.62));
+    let cell = floor(u / 0.42); let f = u - (cell + 0.5) * 0.42;
+    let h = hash3(vec3f(cell, 3.0));
+    if (h > 0.72 && t > 0.35) {
+      let o = (vec2f(hash3(vec3f(cell, 7.0)), hash3(vec3f(cell, 9.0))) - 0.5) * 0.22;
+      c = mix(c, vec3f(1.0, 0.97, 0.8), star(f - o, 0.035 + 0.04 * (h - 0.72)) * smoothstep(0.35, 0.6, t));
+    }
+  } else {
+    let t = (hz - u.y) / 2.75;
+    c = mix(vec3f(0.22, 0.72, 0.80), vec3f(0.10, 0.20, 0.52), smoothstep(0.0, 1.0, t));
+    let w = abs(fract((u.y + 0.07 * sin(u.x * 2.6 + u.y * 4.0)) / 0.32) - 0.5);
+    c = mix(c, vec3f(0.75, 0.95, 1.0), aa(w * 0.32 - 0.018) * (1.0 - t) * 0.55);       // 물결 줄
+    let refl = aa(abs(u.x - 1.7) - 0.55 * (1.0 - t * 1.6)) * step(0.5, fract(u.y / 0.16 + sin(u.x * 5.0) * 0.3));
+    c = mix(c, vec3f(1.0, 0.85, 0.45), refl * (1.0 - smoothstep(0.0, 0.5, t)) * 0.8);   // 해 그림자
+    let l = u - vec2f(-1.5, -1.3);                                        // 물고기
+    let body = length(l / vec2f(0.85, 0.48)) - 1.0;
+    let tail = max(max(-l.x - 1.25, l.x + 0.62), abs(l.y) - (-l.x - 0.62) * 0.75);
+    let fish = aa(min(body * 0.45, tail));
+    var fc = mix(vec3f(1.0, 0.55, 0.42), vec3f(1.0, 0.78, 0.45), smoothstep(-0.4, 0.5, l.y));
+    fc = mix(fc, vec3f(1.0, 0.95, 0.85), aa(abs(abs(l.x + 0.05) - 0.22) - 0.035) * aa(body * 0.45));   // 줄무늬
+    c = mix(c, fc, fish);
+    c = mix(c, vec3f(0.05, 0.05, 0.1), aa(length(l - vec2f(0.45, 0.1)) - 0.08));
+    c = mix(c, vec3f(1.0), aa(length(l - vec2f(0.48, 0.13)) - 0.025));
+    for (var i = 0; i < 3; i++) {                                         // 물방울
+      let b = l - vec2f(1.0 + f32(i) * 0.25, 0.35 + f32(i) * 0.38);
+      c = mix(c, vec3f(0.85, 0.97, 1.0), aa(abs(length(b) - (0.07 + f32(i) * 0.03)) - 0.016));
+    }
+  }
+  return c;
+}
+// 옆면 그림: 바닷속 (s = 면을 따라가는 좌표, y = 높이). 위는 밝은 청록, 아래는 남색, 바닥에서 해초, 물방울
+fn picSide(s: f32, y: f32) -> vec3f {
+  var c = mix(vec3f(0.10, 0.20, 0.52), vec3f(0.24, 0.74, 0.80), smoothstep(0.0, 3.0, y));
+  let k = floor(s / 1.1 + 0.5);
+  let x = s - k * 1.1 + 0.18 * sin(y * 3.2 + k * 1.7);
+  let hgt = 1.4 + 0.8 * hash3(vec3f(k, 1.0, 0.0));
+  c = mix(c, mix(vec3f(0.25, 0.70, 0.35), vec3f(0.55, 0.88, 0.40), y / hgt), aa(abs(x) - 0.11 * (1.0 - y / hgt)) * step(y, hgt));
+  let cell = floor(vec2f(s, y) / 0.5); let f = vec2f(s, y) - (cell + 0.5) * 0.5;
+  if (hash3(vec3f(cell, 5.0)) > 0.8) { c = mix(c, vec3f(0.85, 0.97, 1.0), aa(abs(length(f) - 0.07) - 0.015)); }
+  let sp = abs(fract(s / 0.9 + y * 0.15) - 0.5);                          // 노란 작은 물고기 떼
+  let fy = abs(fract(y / 0.75) - 0.5);
+  if (y > 1.3) { c = mix(c, vec3f(1.0, 0.85, 0.3), aa(length(vec2f(sp * 0.9, fy * 0.75) / vec2f(0.12, 0.06)) * 0.05 - 0.05) * step(0.6, hash3(vec3f(floor(s / 0.9 + y * 0.15), floor(y / 0.75), 2.0)))); }
+  return c;
+}
+// rgb = 색, a = 검은 막인 정도 (광택용)
+fn scratchAlb(q: vec3f) -> vec4f {
+  let a = abs(q - vec3f(0.0, 1.5, 0.0)) - vec3f(4.0, 1.5, 2.5) + 0.4;
+  let depth = -(length(max(a, vec3f(0.0))) + min(max(a.x, max(a.y, a.z)), 0.0) - 0.4);
+  var pic: vec3f;
+  if (a.y >= a.x && a.y >= a.z) {
+    if (q.y > 1.5) { pic = picTop(vec2f(q.x, -q.z)); }
+    else { pic = mix(vec3f(1.0, 0.6, 0.7), vec3f(0.6, 0.7, 1.0), fract(q.x * 0.4 + q.z * 0.3)); }   // 바닥: 무지개
+  } else if (a.z >= a.x) { pic = picSide(q.x * sign(q.z), q.y); }
+  else { pic = picSide(-q.z * sign(q.x) + 4.5, q.y); }
+  let core = vec3f(0.93, 0.91, 0.86);
+  var c = mix(pic, core, smoothstep(0.28, 0.4, depth));
+  let coat = 1.0 - smoothstep(0.005, 0.013, depth);
+  let ink = vec3f(0.035, 0.034, 0.045) * (0.85 + 0.3 * noise3(q * 30.0));
+  return vec4f(mix(c, ink, coat), coat);
+}
 `;
 // 투명 비누 투과: S·N = 따라갈 거리장·법선 함수 이름, wq·wd = 빠져나간 점·방향을 월드로 바꾸는 식
 // 굴절 세기: 실제 비누 굴절률(≈1.45)대로 꺾으면 0.5 mm 격자의 작은 면 방향 오차가 비쳐 보이는 속을 크게 비틀어
@@ -318,6 +393,9 @@ struct FOut { @location(0) color: vec4f, @builtin(frag_depth) depth: f32 };
     ao = clamp(1.0 - ao * 0.22, 0.0, 1.0);
     let speck = 0.94 + 0.06 * noise3(p * 6.0) + 0.04 * step(0.985, hash3(floor(p * 40.0)));
     var alb = soapColor(p) * speck * (1.0 - crumb * 0.12);
+    let sid = i32(U.look.w + 0.5);
+    var coat = 0.0;
+    if (sid == 8 && !preview) { let sa = scratchAlb(p); alb = sa.rgb * (0.97 + 0.03 * speck) * (1.0 - crumb * 0.12); coat = sa.a; }
     alb = mix(alb, alb * vec3f(1.03, 1.02, 1.05) + 0.03, cut);
     let wrap = max((dot(n, L) + 0.35) / 1.35, 0.0);
     let Hh = normalize(L + V);
@@ -340,7 +418,11 @@ struct FOut { @location(0) color: vec4f, @builtin(frag_depth) depth: f32 };
     col = alb * (wrap * sh * vec3f(1.0, 0.96, 0.9) * 0.8 + sky * 0.38 * ao) + spec;
     col += alb * vec3f(1.0, 0.88, 0.85) * thin * 0.2 * (0.4 + 0.6 * max(dot(-n, L), 0.0));
     let lid = i32(U.look.w + 0.5);
-    if (!preview) {
+    // 스크래치 비누는 불투명: 검은 막은 반들반들한 래커처럼 (선명한 하이라이트 + 주변 반사)
+    if (lid == 8 && !preview) {
+      col += coat * (pow(max(dot(n, Hh), 0.0), 120.0) * 0.8 * max(sh, 0.25) + envColor(reflect(rd, n)) * fres * 0.5);
+    }
+    if (!preview && lid != 8) {
       // 투명 비누: 비쳐 보이는 속 + 표면 반사(프레넬) + 하이라이트.
       // 칼·끌로 깎은 면은 미세하게 긁혀 뿌옇다 (실제 투명 비누도 갓 자르면 흐려지고 손으로 닦아야 맑아진다).
       // 예전엔 깎은 면도 유리처럼 매끈하게 굴절시켜, 홈이 렌즈·프리즘처럼 속을 어긋나게 보이고 홈 벽에 작업대가 갈색 줄로 비쳤다.
@@ -472,6 +554,11 @@ struct COut2 { @location(0) color: vec4f, @builtin(frag_depth) depth: f32 };
   let rw = normalize((K.m * vec4f(reflect(rd, n), 0.0)).xyz);
   let refl = envColor(rw) * 1.6 + vec3f(0.08);
   var col = mix(transmitC(p, rd, n, id, L, n), refl, fr) + pow(max(dot(n, Hh), 0.0), 140.0) * 1.2;
+  if (id == 8) {                                                    // 스크래치 비누 덩어리: 불투명 (p = 원래 좌표)
+    let sa = scratchAlb(p);
+    let wrap = max((dot(n, L) + 0.35) / 1.35, 0.0);
+    col = sa.rgb * (wrap * 0.8 + 0.3) + pow(max(dot(n, Hh), 0.0), mix(30.0, 120.0, sa.a)) * mix(0.15, 0.8, sa.a) + refl * fr * sa.a * 0.5;
+  }
   col += rimLight(normalize((K.m * vec4f(n, 0.0)).xyz), normalize((K.m * vec4f(V, 0.0)).xyz));
   if (id == 6) { let fl = flake(p, Hh); col += fl.rgb * fl.a * 1.2; }
   var o: COut2;
@@ -511,6 +598,7 @@ struct COut { @builtin(position) pos: vec4f, @location(0) wp: vec3f, @location(1
       base = vec3f(1.0, 0.62, 0.52); dens = 400.0;                  // 속 모양을 깎은 칩은 산호색 불투명
     }
   }
+  if (id == 8) { base = scratchAlb(i.orig).rgb; dens = 400.0; }     // 스크래치: 검은 막·그림 조각 그대로 불투명
   let ndv = max(abs(dot(n, V)), 0.2);
   let fres = pow(1.0 - ndv, 3.0);
   let a = clamp(floorA + (1.0 - exp(-dens * i.th / ndv)) + fres * 0.35, 0.0, 0.97);
