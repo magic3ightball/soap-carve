@@ -24,7 +24,7 @@ export async function run(C, label) {
   const post = async (name, body) => { await fetch(`${RECV}/${label}/${name}`, { method: 'POST', body }); };
 
   const s = C.sdf, h = s.h, [nx, ny, nz] = s.dims;
-  C.setLook(7);
+  C.setLook(10);
   C.setTarget('fish');                                      // 새 비누 + 목표 물고기 (가이드 켜짐)
   const T = C.tgt.arr;
   const log = [];

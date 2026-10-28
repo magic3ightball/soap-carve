@@ -7,7 +7,7 @@ const RECV = 'http://127.0.0.1:8941';
 // 장면마다 같은 난수열 (칼끝 부스러짐 등이 Math.random을 쓴다)
 function seed(s) { let x = s; Math.random = () => ((x = (x * 16807) % 2147483647) / 2147483647); }
 
-function reset(C, look = 7) {
+function reset(C, look = 10) {
   C.newSoap(); C.water.clear(); C.chips.clear(); C.chunks.clear();
   C.setLook(look); C.setTool('knife'); C.knife.setDepth(0.08); C.knife.setTilt(25);
   C.st.cursor = null;

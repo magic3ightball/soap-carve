@@ -25,18 +25,12 @@ fn fbm(p: vec3f) -> f32 {
   for (var i = 0; i < 4; i++) { s += a * noise3(q); q = q * 2.03 + vec3f(1.7, 9.2, 3.1); a *= 0.5; }
   return s;
 }
-// 3D로 흩뿌린 작은 알갱이 (씨앗·꽃봉오리·기포). scale: cm당 칸 수, r: 칸 안 반지름, keep: 칸에 알갱이가 있을 확률
-fn dots(p: vec3f, scale: f32, r: f32, keep: f32) -> f32 {
-  let c = floor(p * scale); let f = fract(p * scale);
-  let o = vec3f(0.2) + 0.6 * vec3f(hash3(c), hash3(c + 11.1), hash3(c + 23.7));
-  return step(1.0 - keep, hash3(c + 5.3)) * (1.0 - smoothstep(r * 0.6, r, length(f - o)));
-}
-// 비누 대표색 (불투명하게 그릴 때: 목표 모양 미리보기 등). 실제 비누는 transmit()에서 투명하게 그린다
+// 비누 바탕색 (U.look.rgb, 선형)
 fn soapColor(p: vec3f) -> vec3f { return U.look.rgb; }
 fn toScreen(c: vec3f) -> vec3f { return pow(clamp(c, vec3f(0.0), vec3f(1.0)), vec3f(1.0 / 2.2)); }
 `;
 
-// 비누 재질 (본체와 떨어진 조각이 같이 쓴다): 나뭇결·배경·반짝이·벌집·비누 속 재질
+// 비누 재질 (본체·떨어진 조각·칩이 같이 쓴다): 배경·주변광·불투명 비누 색과 조명
 const MATERIAL_WGSL = /* wgsl */`
 // 허공 스튜디오 (작업대 없음): 어두운 단색에 아주 약한 위아래 그라데이션 — 비누만 돋보이게
 fn bgColor(rd: vec3f) -> vec3f { return mix(vec3f(0.075, 0.075, 0.088), vec3f(0.15, 0.15, 0.168), clamp(rd.y * 0.9 + 0.5, 0.0, 1.0)); }
@@ -52,225 +46,38 @@ fn rimLight(n: vec3f, V: vec3f) -> vec3f {
   let e = pow(1.0 - max(dot(n, V), 0.0), 2.5);
   return vec3f(0.62, 0.70, 0.85) * e * (0.25 + 0.75 * max(dot(n, rimDir()), 0.0)) * 0.55;
 }
-// 반짝이 조각 하나: 칸마다 무작위 방향의 작은 판. 판 법선이 반사 방향과 맞으면 번쩍 (보는 각도 따라 반짝임)
-fn flake(q: vec3f, H: vec3f) -> vec4f {
-  let sc = 9.0; let c = floor(q * sc); let f = fract(q * sc);
-  let o = vec3f(0.25) + 0.5 * vec3f(hash3(c), hash3(c + 11.1), hash3(c + 23.7));
-  let on = step(0.55, hash3(c + 5.3)) * (1.0 - smoothstep(0.1, 0.17, length(f - o)));
-  if (on <= 0.0) { return vec4f(0.0); }
-  let fn_ = normalize(vec3f(hash3(c + 1.3), hash3(c + 2.9), hash3(c + 4.1)) - 0.5);
-  let sp = pow(abs(dot(fn_, H)), 50.0);
-  let hue = hash3(c + 8.8);
-  var tint = vec3f(1.0, 0.82, 0.45);                                   // 금
-  if (hue > 0.66) { tint = vec3f(1.0, 0.6, 0.85); } else if (hue > 0.33) { tint = vec3f(0.85, 0.9, 1.0); }   // 분홍·은
-  return vec4f(tint * (0.45 + sp * 7.0), on * (0.25 + sp * 0.75));
-}
-// 벌집 무늬: 육각형 칸 가장자리까지 거리 (칸 안지름 0.5 기준)
-fn hexEdge(p: vec2f) -> f32 {
-  let sz = vec2f(1.0, 1.7320508);
-  let a = p - sz * floor(p / sz) - sz * 0.5;
-  let pb = p - sz * 0.5;
-  let b = pb - sz * floor(pb / sz) - sz * 0.5;
-  let g = select(b, a, dot(a, a) < dot(b, b));
-  let q = abs(g);
-  return 0.5 - max(dot(q, vec2f(0.5, 0.8660254)), q.x);
-}
-// 비누 속 한 걸음에서 보이는 것: rgb = 색, a = 이 걸음의 불투명도 (색 있는 투명 바탕 + 박힌 것)
-fn medium(q: vec3f, H: vec3f, id: i32) -> vec4f {
-  if (id == 1) {                                      // 젤리 층: 비스듬한 파스텔 투명 층 + 층 사이 마이카 선
-    // 비누 속을 걸음마다 지나므로 무거운 4겹 노이즈(fbm) 대신 1겹 노이즈 (fbm이면 화면당 40~80 ms 걸렸다)
-    let t = q.y + q.x * 0.33 + 0.08 * noise3(q * 0.8);
-    let b = floor(t / 0.8); let f = fract(t / 0.8); let m = b - 4.0 * floor(b / 4.0);
-    if (min(f, 1.0 - f) < 0.035) {
-      let fl = flake(q * 1.6, H);
-      return vec4f(mix(vec3f(1.0, 0.93, 0.8), fl.rgb, step(0.001, fl.a)), max(fl.a, 0.18));
-    }
-    var c = vec4f(0.98, 0.62, 0.74, 0.045);
-    if (m == 1.0) { c = vec4f(0.96, 0.96, 1.0, 0.006); } else if (m == 2.0) { c = vec4f(0.5, 0.9, 0.76, 0.04); }
-    else if (m == 3.0) { c = vec4f(1.0, 0.88, 0.45, 0.04); }
-    return c;
-  }
-  if (id == 2) {                                      // 꿀 벌집: 호박색 꿀 + 윗면 아래 3 mm에 벌집 벽 + 작은 기포
-    if (q.y > 2.85 && q.y < 3.02) {                   // 버블랩 자국: 윗면 바로 아래만
-      let e = hexEdge(q.xz / 0.36);
-      if (e < 0.04) { return vec4f(1.0, 0.85, 0.5, 0.14); }
-    }
-    let bub = dots(q * 1.5, 9.0, 0.13, 0.25);
-    if (bub > 0.0) { return vec4f(1.0, 0.95, 0.8, bub * 0.15); }
-    return vec4f(mix(vec3f(0.80, 0.38, 0.05), vec3f(0.95, 0.58, 0.12), noise3(q * 1.2)), 0.018);
-  }
-  if (id == 7) {                                      // 모양 품은 투명 비누: 맑은 바탕 + 작은 기포 (속 모양은 transmit에서)
-    let bub = dots(q * 1.7, 9.0, 0.12, 0.2);
-    if (bub > 0.0) { return vec4f(vec3f(0.95, 1.0, 1.0), bub * 0.1); }
-    return vec4f(0.88, 0.97, 0.98, 0.004);
-  }
-  let fl = flake(q, H);                               // 6 반짝이: 살짝 뿌연 분홍 바탕에 반짝이
-  if (fl.a > 0.0) { return fl; }
-  return vec4f(0.98, 0.84, 0.92, 0.012);
-}
-
-// ── 8 스크래치 비누: 0.1 mm 검은 막 아래 3 mm 그림 층, 그 아래는 흰 비누 ──
-// 깊이는 처음 비누 상자(sdf.js SOAP)에서 잰다 → 얇게 긁기만 해도 그림이 드러나고, 깊게 파면 흰 속살.
-fn aa(d: f32) -> f32 { return 1.0 - smoothstep(-0.012, 0.012, d); }        // 2D 거리(cm) → 칠할 양
-fn star(p: vec2f, r: f32) -> f32 { let a = abs(p); return aa(min(a.x * 0.3 + a.y, a.x + a.y * 0.3) - r); }
-// 윗면 그림: 노을 바다 (위쪽 = 비누 안쪽 -z). 해·별·물결·해 그림자·물고기
-fn picTop(u: vec2f) -> vec3f {
-  let hz = 0.25 + 0.06 * sin(u.x * 1.7);
-  var c: vec3f;
-  if (u.y > hz) {
-    let t = (u.y - hz) / 2.3;
-    c = mix(vec3f(1.0, 0.62, 0.30), vec3f(0.96, 0.42, 0.62), smoothstep(0.0, 0.45, t));
-    c = mix(c, vec3f(0.36, 0.26, 0.66), smoothstep(0.45, 1.0, t));
-    let sd = length(u - vec2f(1.7, hz + 0.75));
-    c += vec3f(1.0, 0.7, 0.3) * 0.35 * exp(-sd * 1.6);                   // 해무리
-    c = mix(c, vec3f(1.0, 0.88, 0.42), aa(sd - 0.62));
-    let cell = floor(u / 0.42); let f = u - (cell + 0.5) * 0.42;
-    let h = hash3(vec3f(cell, 3.0));
-    if (h > 0.72 && t > 0.35) {
-      let o = (vec2f(hash3(vec3f(cell, 7.0)), hash3(vec3f(cell, 9.0))) - 0.5) * 0.22;
-      c = mix(c, vec3f(1.0, 0.97, 0.8), star(f - o, 0.035 + 0.04 * (h - 0.72)) * smoothstep(0.35, 0.6, t));
-    }
-  } else {
-    let t = (hz - u.y) / 2.75;
-    c = mix(vec3f(0.22, 0.72, 0.80), vec3f(0.10, 0.20, 0.52), smoothstep(0.0, 1.0, t));
-    let w = abs(fract((u.y + 0.07 * sin(u.x * 2.6 + u.y * 4.0)) / 0.32) - 0.5);
-    c = mix(c, vec3f(0.75, 0.95, 1.0), aa(w * 0.32 - 0.018) * (1.0 - t) * 0.55);       // 물결 줄
-    let refl = aa(abs(u.x - 1.7) - 0.55 * (1.0 - t * 1.6)) * step(0.5, fract(u.y / 0.16 + sin(u.x * 5.0) * 0.3));
-    c = mix(c, vec3f(1.0, 0.85, 0.45), refl * (1.0 - smoothstep(0.0, 0.5, t)) * 0.8);   // 해 그림자
-    let l = u - vec2f(-1.5, -1.3);                                        // 물고기
-    let body = length(l / vec2f(0.85, 0.48)) - 1.0;
-    let tail = max(max(-l.x - 1.25, l.x + 0.62), abs(l.y) - (-l.x - 0.62) * 0.75);
-    let fish = aa(min(body * 0.45, tail));
-    var fc = mix(vec3f(1.0, 0.55, 0.42), vec3f(1.0, 0.78, 0.45), smoothstep(-0.4, 0.5, l.y));
-    fc = mix(fc, vec3f(1.0, 0.95, 0.85), aa(abs(abs(l.x + 0.05) - 0.22) - 0.035) * aa(body * 0.45));   // 줄무늬
-    c = mix(c, fc, fish);
-    c = mix(c, vec3f(0.05, 0.05, 0.1), aa(length(l - vec2f(0.45, 0.1)) - 0.08));
-    c = mix(c, vec3f(1.0), aa(length(l - vec2f(0.48, 0.13)) - 0.025));
-    for (var i = 0; i < 3; i++) {                                         // 물방울
-      let b = l - vec2f(1.0 + f32(i) * 0.25, 0.35 + f32(i) * 0.38);
-      c = mix(c, vec3f(0.85, 0.97, 1.0), aa(abs(length(b) - (0.07 + f32(i) * 0.03)) - 0.016));
-    }
-  }
-  return c;
-}
-// 옆면 그림: 바닷속 (s = 면을 따라가는 좌표, y = 높이). 위는 밝은 청록, 아래는 남색, 바닥에서 해초, 물방울
-fn picSide(s: f32, y: f32) -> vec3f {
-  var c = mix(vec3f(0.10, 0.20, 0.52), vec3f(0.24, 0.74, 0.80), smoothstep(0.0, 3.0, y));
-  let k = floor(s / 1.1 + 0.5);
-  let x = s - k * 1.1 + 0.18 * sin(y * 3.2 + k * 1.7);
-  let hgt = 1.4 + 0.8 * hash3(vec3f(k, 1.0, 0.0));
-  c = mix(c, mix(vec3f(0.25, 0.70, 0.35), vec3f(0.55, 0.88, 0.40), y / hgt), aa(abs(x) - 0.11 * (1.0 - y / hgt)) * step(y, hgt));
-  let cell = floor(vec2f(s, y) / 0.5); let f = vec2f(s, y) - (cell + 0.5) * 0.5;
-  if (hash3(vec3f(cell, 5.0)) > 0.8) { c = mix(c, vec3f(0.85, 0.97, 1.0), aa(abs(length(f) - 0.07) - 0.015)); }
-  let sp = abs(fract(s / 0.9 + y * 0.15) - 0.5);                          // 노란 작은 물고기 떼
-  let fy = abs(fract(y / 0.75) - 0.5);
-  if (y > 1.3) { c = mix(c, vec3f(1.0, 0.85, 0.3), aa(length(vec2f(sp * 0.9, fy * 0.75) / vec2f(0.12, 0.06)) * 0.05 - 0.05) * step(0.6, hash3(vec3f(floor(s / 0.9 + y * 0.15), floor(y / 0.75), 2.0)))); }
-  return c;
-}
-// rgb = 색, a = 검은 막인 정도 (광택용)
-fn scratchAlb(q: vec3f) -> vec4f {
+// ── v2 불투명 비누 ──
+// 비누 바깥 상자(sdf.js SOAP)에서 안쪽으로 들어간 깊이(cm). 떨어진 조각·칩은 깎인 면 종류 텍스처가 없어서 이걸로 겉/속을 가른다
+fn origDepth(q: vec3f) -> f32 {
   let a = abs(q - vec3f(0.0, 1.5, 0.0)) - vec3f(4.0, 1.5, 2.5) + 0.4;
-  let depth = -(length(max(a, vec3f(0.0))) + min(max(a.x, max(a.y, a.z)), 0.0) - 0.4);
-  var pic: vec3f;
-  if (a.y >= a.x && a.y >= a.z) {
-    if (q.y > 1.5) { pic = picTop(vec2f(q.x, -q.z)); }
-    else { pic = mix(vec3f(1.0, 0.6, 0.7), vec3f(0.6, 0.7, 1.0), fract(q.x * 0.4 + q.z * 0.3)); }   // 바닥: 무지개
-  } else if (a.z >= a.x) { pic = picSide(q.x * sign(q.z), q.y); }
-  else { pic = picSide(-q.z * sign(q.x) + 4.5, q.y); }
-  let core = vec3f(0.93, 0.91, 0.86);
-  var c = mix(pic, core, smoothstep(0.28, 0.4, depth));
-  let coat = 1.0 - smoothstep(0.005, 0.013, depth);
-  let ink = vec3f(0.035, 0.034, 0.045) * (0.85 + 0.3 * noise3(q * 30.0));
-  return vec4f(mix(c, ink, coat), coat);
+  return -(length(max(a, vec3f(0.0))) + min(max(a.x, max(a.y, a.z)), 0.0) - 0.4);
+}
+// 색: 겉면(마른 껍질)은 살짝 어둡고 채도 높게 + 가루 얼룩, 깎인 면(cut = 1)은 하얀 쪽으로 밝게
+fn soapAlb(base: vec3f, p: vec3f, cut: f32) -> vec3f {
+  let lum = dot(base, vec3f(0.2126, 0.7152, 0.0722));
+  let skin = mix(vec3f(lum), base, 1.12) * 0.88 * (0.95 + 0.05 * noise3(p * 22.0)) * (0.96 + 0.04 * fbm(p * 2.5));
+  let fresh = mix(base, vec3f(1.0, 0.99, 0.97), 0.16) * 1.03 * (0.985 + 0.015 * noise3(p * 40.0));
+  return mix(skin, fresh, cut);
+}
+// 무광 왁스 조명 (GPU Gems 16장 wrap 조명 + 그림자 경계의 따뜻한 번짐 + 얇은 곳 뒤 빛).
+// cut: 깎인 면 정도(넓고 약한 광택 → 은은한 왁스 광택), thin: 얇은 정도(0~1)
+fn soapLight(alb: vec3f, n: vec3f, V: vec3f, L: vec3f, sh: f32, ao: f32, cut: f32, thin: f32) -> vec3f {
+  let nl = dot(n, L);
+  let lam = max(nl, 0.0);
+  let wrapT = max((nl + 0.45) / 1.45, 0.0);
+  let scatter = alb * alb * vec3f(1.15, 0.95, 0.85);                   // 속에서 번져 나온 빛: 채도 높고 따뜻하게
+  let key = vec3f(1.0, 0.96, 0.9);
+  var c = alb * key * lam * sh * 0.85 + scatter * key * max(wrapT - lam, 0.0) * mix(0.5, 1.0, sh);
+  let sky = mix(vec3f(0.30, 0.28, 0.33), vec3f(0.55, 0.55, 0.60), n.y * 0.5 + 0.5);
+  c += alb * sky * 0.4 * ao;
+  let ndh = max(dot(n, normalize(L + V)), 0.0);
+  c += key * pow(ndh, mix(6.0, 36.0, cut)) * mix(0.035, 0.11, cut) * sh;
+  let fres = pow(1.0 - max(dot(n, V), 0.0), 4.0);
+  c += envColor(reflect(-V, n)) * fres * mix(0.04, 0.10, cut);
+  c += scatter * key * thin * 0.35 * (0.35 + 0.65 * max(-nl, 0.0));
+  return c;
 }
 `;
-// 투명 비누 투과: S·N = 따라갈 거리장·법선 함수 이름, wq·wd = 빠져나간 점·방향을 월드로 바꾸는 식
-// 굴절 세기: 실제 비누 굴절률(≈1.45)대로 꺾으면 0.5 mm 격자의 작은 면 방향 오차가 비쳐 보이는 속을 크게 비틀어
-// 깎은 면에 줄무늬·띠·얼룩으로 드러났다. 색·투명도는 그대로 두고 휘는 정도만 줄인다 (2026-10-07 사용자 승인).
-// 1.2: 휘는 양 (1 - 1/n)이 1.45 대비 약 46% 줄어든다. 회귀 장면 비교로 고름 (1.12는 비누가 납작한 판처럼 보였다).
-// ?ior=<값>으로 바꿔 볼 수 있다 (tools/regress로 비교할 때)
-const REFR_IOR = (+(new URLSearchParams(location.search).get('ior')) || 1.2).toFixed(3);
-const transmitWGSL = (name, S, N, wq, wd, T) => /* wgsl */`
-// 투명한 비누: 시선을 굴절시켜 비누 속을 지나가며 박힌 것(꽃잎·기포·반짝이)을 쌓고, 빠져나간 뒤 보이는 바닥·배경을 흡수만큼 물들인다
-// ng = 비누 표면의 실제 법선 (속 모양이 표면에 드러난 단면을 비출 때 쓴다)
-fn ${name}(p: vec3f, rd: vec3f, n: vec3f, id: i32, L: vec3f, ng: vec3f) -> vec3f {
-  var dir = refract(rd, n, 1.0 / ${REFR_IOR});
-  if (dot(dir, dir) < 0.5) { dir = rd; }
-  var q = p - n * 0.02;
-  var acc = vec3f(0.0); var a = 0.0; var dist = 0.0;
-  let H = normalize(L - dir);
-  var reentered = 0;
-  for (var i = 0; i < 90; i++) {
-    let sd = ${S}(q);
-    // 첫 걸음이 벌써 '밖'이면 진짜로 나간 게 아니라 시작점이 표면에 너무 붙은 것 (0.5 mm 격자 반올림).
-    // 이걸 나감으로 보고 재진입하면 깎인 면에 등고선 같은 흰 줄이 생겼다 → 조금 더 안쪽에서 다시 시작
-    if (sd > 0.0 && i == 0) { q = q - n * 0.03; continue; }
-    if (sd > 0.0) {
-      // 비누 밖으로 나왔다. 칼 턱·홈 벽에선 바로 앞이 또 비누다 (얇은 턱을 지나 아래 몸통으로 다시 들어간다).
-      // 예전엔 한 번 나가면 곧장 바닥·배경을 찍어, 속 모양 앞에 갈색·회청 띠가 생겼다 (턱 벽에서 1 mm 안에 빠져나간 곳과 정확히 겹침).
-      // 재진입은 얇은 턱에서만: 들어온 지 1.5 mm 안에 굴절로 빠져나가 실제 빈틈을 건너 다시 닿을 때.
-      // (전반사(못 빠져나감)나 깊이 지나온 빛까지 재진입시키면 깎은 면·바닥 윤곽에 등고선 같은 흰 줄이 생겼다)
-      if (reentered > 0 || dist > 0.15) { break; }
-      let no = ${N}(q);
-      let dOut = refract(dir, -no, ${REFR_IOR});
-      if (dot(dOut, dOut) < 0.5) { break; }
-      var r = q + dOut * 0.02; var tr = 0.02; var back = false;
-      for (var k = 0; k < 8; k++) {
-        let sk = ${S}(r);
-        if (sk < 0.004) { back = true; break; }
-        tr += max(sk, 0.02); r = q + dOut * tr;
-        if (tr > 0.6) { break; }
-      }
-      if (!back) { break; }
-      // 다시 들어간다: 들어간 면 법선으로 굴절, 들어간 자리부터 계속
-      reentered = 1;
-      let ni = ${N}(r);
-      dir = refract(dOut, ni, 1.0 / ${REFR_IOR});
-      if (dot(dir, dir) < 0.5) { dir = dOut; }
-      q = r - ni * 0.02;
-      continue;
-    }
-      let st = select(0.05, 0.08, id == 2);              // 꿀은 바탕이 고르니 걸음을 넓게
-    if (id == 7) {
-      // 속에 든 모양(목표 모양 거리장 < 0)은 색 있는 불투명 비누 조각상: 거리장 기울기로 법선을 잡아 빛을 받게
-      var td = ${T}(q);
-      if (td < 0.0) {
-        // 0.5 mm 걸음 안에서 표면 쪽으로 되짚어 붙인다 (안 그러면 가장자리가 계단·톱니로 보인다)
-        var qe = q;
-        for (var r2 = 0; r2 < 4; r2++) { qe = qe + dir * td; td = ${T}(qe); }
-        let e2 = 0.05;
-        var ne = normalize(vec3f(${T}(qe + vec3f(e2, 0, 0)) - ${T}(qe - vec3f(e2, 0, 0)), ${T}(qe + vec3f(0, e2, 0)) - ${T}(qe - vec3f(0, e2, 0)),
-                                 ${T}(qe + vec3f(0, 0, e2)) - ${T}(qe - vec3f(0, 0, e2))));
-        // 표면에서 바로 만났으면(첫 걸음) 칼에 잘려 드러난 단면 → 단면은 깎인 비누 면 방향으로 비춘다.
-        // (예전엔 속 모양 원래 표면의 기울기로 비춰서, 평평하게 자른 단면도 둥근 몸통처럼 보였다: 단면 위 점의 96%가 45° 넘게 어긋남)
-        let cutFace = dist < 0.07 && reentered == 0;
-        if (cutFace) { ne = ng; }
-        let base = select(vec3f(1.0, 0.62, 0.52), vec3f(1.0, 0.66, 0.57), cutFace);
-        var lit = base * (0.35 + 0.75 * max((dot(ne, L) + 0.3) / 1.3, 0.0)) + pow(max(dot(ne, normalize(L - dir)), 0.0), 40.0) * 0.25;
-        if (cutFace) { lit = base * (0.42 + 0.6 * max((dot(ne, L) + 0.3) / 1.3, 0.0)); }   // 잘린 단면은 무광
-        acc += (1.0 - a) * lit; a = 1.0;
-        break;
-      }
-    }
-    let e = medium(q, H, id);
-    acc += (1.0 - a) * e.rgb * e.a; a += (1.0 - a) * e.a;
-    if (a > 0.97) { break; }
-    q += dir * st; dist += st;
-  }
-  // 빠져나가기: 바깥쪽 법선 기준으로 다시 굴절
-  let n2 = ${N}(q);
-  var d2 = refract(dir, -n2, ${REFR_IOR});
-  if (dot(d2, d2) < 0.5) { d2 = reflect(dir, -n2); }
-  // 너머로 보이는 것은 월드 좌표로 (떨어진 조각은 자기 좌표에서 계산하므로 바꿔 준다)
-  let wq = ${wq}; let wd = normalize(${wd});
-  let behind = envColor(wd);                                             // 작업대 없이 스튜디오 주변만
-  var absorb = vec3f(0.03);                                              // 색은 medium의 바탕이 맡고, 흡수는 약하게
-  if (id == 2) { absorb = vec3f(0.05, 0.22, 0.6); }                     // 꿀: 파랑을 많이 먹어 진한 호박색
-  if (id == 6) { absorb = vec3f(0.06, 0.28, 0.12); }                     // 반짝이: 연분홍
-  return acc + (1.0 - a) * behind * exp(-absorb * dist) * 1.3;
-}
-`;
-
 const MARCH_WGSL = FRAME_WGSL + /* wgsl */`
 @group(0) @binding(1) var sdfTex: texture_3d<f32>;
 @group(0) @binding(2) var smp: sampler;
@@ -295,7 +102,6 @@ fn Tm(p: vec3f) -> f32 {
   if (any(q < vec3f(0.0)) || any(q > vec3f(1.0))) { return 9.0; }
   return textureSampleLevel(tgtTex, smp, q, 0.0).r;
 }
-${transmitWGSL('transmit', 'S', 'N', 'q', 'd2', 'Tm')}
 fn N(p: vec3f) -> vec3f {
   let e = U.gmin.w;
   return normalize(vec3f(S(p + vec3f(e, 0, 0)) - S(p - vec3f(e, 0, 0)), S(p + vec3f(0, e, 0)) - S(p - vec3f(0, e, 0)),
@@ -359,7 +165,7 @@ struct FOut { @location(0) color: vec4f, @builtin(frag_depth) depth: f32 };
     let p = hitP;
     // 법선 요철(bump)은 넣지 않는다: 깎은 홈 가장자리에서 점무늬가 생겼다. 결은 알베도 얼룩으로만
     var n = N(p);
-    let nGeo = n;                                   // 칼 결로 흔들기 전 법선 (투명 비누 굴절에 쓴다)
+    let nGeo = n;                                   // 칼 결로 흔들기 전 법선 (림 라이트에 쓴다)
     let tx = textureSampleLevel(sdfTex, smp, uvw(p), 0.0);
     // g = 깎인 면 종류 (1 칼, 0.59 U자 끌·자른 면, 0.47 부스러짐, 0.39 물로 녹음, 0 원래 겉면)
     var kind = tx.g;
@@ -391,57 +197,23 @@ struct FOut { @location(0) color: vec4f, @builtin(frag_depth) depth: f32 };
     var ao = 0.0;
     for (var k = 1; k <= 4; k++) { let hk = f32(k) * 0.08; ao += (hk - S(p + n * hk)) / hk; }
     ao = clamp(1.0 - ao * 0.22, 0.0, 1.0);
-    let speck = 0.94 + 0.06 * noise3(p * 6.0) + 0.04 * step(0.985, hash3(floor(p * 40.0)));
-    var alb = soapColor(p) * speck * (1.0 - crumb * 0.12);
-    let sid = i32(U.look.w + 0.5);
-    var coat = 0.0;
-    if (sid == 8 && !preview) { let sa = scratchAlb(p); alb = sa.rgb * (0.97 + 0.03 * speck) * (1.0 - crumb * 0.12); coat = sa.a; }
-    alb = mix(alb, alb * vec3f(1.03, 1.02, 1.05) + 0.03, cut);
-    let wrap = max((dot(n, L) + 0.35) / 1.35, 0.0);
-    let Hh = normalize(L + V);
-    // 갓 깎은 면은 왁스처럼 반들 (부스러진 곳은 제외)
+    // v2 불투명 비누: 겉면은 무광·살짝 어둡게, 깎인 면은 밝게 + 은은한 왁스 광택 (부스러진 곳은 광택 없이)
+    let speck = 0.97 + 0.03 * step(0.985, hash3(floor(p * 40.0)));
+    var alb = soapAlb(soapColor(p), p, cut) * speck * (1.0 - crumb * 0.12);
     let fresh = cut * (1.0 - crumb);
-    let gloss = mix(18.0, 70.0, fresh);
-    var spec = pow(max(dot(n, Hh), 0.0), gloss) * mix(0.10, 0.32, fresh) * sh;
     // 젖은 곳: 조금 진하고 번들거린다 (날카로운 하이라이트 + 하늘 반사)
     var wet = 0.0;
     if (!preview) { wet = smoothstep(0.02, 0.35, textureSampleLevel(wetTex, smp, uvw(p), 0.0).r); }
-    alb = mix(alb, alb * vec3f(0.72, 0.68, 0.78), wet);
-    // 거친 깎은 면(칼·끌·부스러짐)의 물기는 날카로운 점 반짝임 대신 퍼진 광택으로 (요철 법선에서 흰 점이 튀었다)
-    let roughW = smoothstep(0.42, 0.46, kind);
-    spec = mix(spec, pow(max(dot(n, Hh), 0.0), mix(160.0, 50.0, roughW)) * mix(1.1, 0.45, roughW) * max(sh, 0.3), wet);
-    let fres = pow(1.0 - max(dot(n, V), 0.0), 4.0);
+    alb = mix(alb, alb * vec3f(0.80, 0.77, 0.84), wet);
     // 얇은 곳은 빛이 비친다 (안쪽 깊이로 근사)
     let inner = -S(p - n * 0.35);
     let thin = 1.0 - smoothstep(0.0, 0.3, inner);
-    let sky = mix(vec3f(0.30, 0.28, 0.33), vec3f(0.55, 0.55, 0.60), n.y * 0.5 + 0.5);
-    col = alb * (wrap * sh * vec3f(1.0, 0.96, 0.9) * 0.8 + sky * 0.38 * ao) + spec;
-    col += alb * vec3f(1.0, 0.88, 0.85) * thin * 0.2 * (0.4 + 0.6 * max(dot(-n, L), 0.0));
-    let lid = i32(U.look.w + 0.5);
-    // 스크래치 비누는 불투명: 검은 막은 반들반들한 래커처럼 (선명한 하이라이트 + 주변 반사)
-    if (lid == 8 && !preview) {
-      col += coat * (pow(max(dot(n, Hh), 0.0), 120.0) * 0.8 * max(sh, 0.25) + envColor(reflect(rd, n)) * fres * 0.5);
-    }
-    if (!preview && lid != 8) {
-      // 투명 비누: 비쳐 보이는 속 + 표면 반사(프레넬) + 하이라이트.
-      // 칼·끌로 깎은 면은 미세하게 긁혀 뿌옇다 (실제 투명 비누도 갓 자르면 흐려지고 손으로 닦아야 맑아진다).
-      // 예전엔 깎은 면도 유리처럼 매끈하게 굴절시켜, 홈이 렌즈·프리즘처럼 속을 어긋나게 보이고 홈 벽에 작업대가 갈색 줄로 비쳤다.
-      // 물로 녹인 면(kind≈0.39)은 닦인 것처럼 다시 맑다. 칼 결은 광택에만 쓰고 굴절엔 원래 법선을 쓴다.
-      // 속 모양이 표면에 드러난 곳은 불투명한 색 비누 단면이라 뿌연 막·굴절이 없다
-      let exposed = lid == 7 && Tm(p - nGeo * 0.03) < 0.0;
-      // 젖으면 흠집에 물이 차 조금 맑아지지만, 문질러 매끈해지기 전엔(녹은 면 표시 전) 반쯤은 뿌옇게 남는다
-      let frost = frostCov * 0.8 * (1.0 - wet * 0.5) * select(1.0, 0.0, exposed);
-      let nT = normalize(mix(nGeo, -rd, frost * 0.85));                 // 뿌연 면은 빛을 덜 꺾는다
-      let fr = (0.04 + 0.96 * pow(1.0 - max(dot(nGeo, V), 0.0), 5.0)) * (1.0 - frost * 0.6);
-      let refl = envColor(reflect(rd, nGeo)) * 1.6 + vec3f(0.08);
-      let tcol = transmit(p, rd, nT, lid, L, nGeo);
-      col = mix(tcol, refl, fr);
-      // 뿌연 막은 속 색을 머금은 젖빛 (간유리처럼): 비쳐 보이는 색을 흰빛 쪽으로 밝히고 빛 받는 쪽을 조금 더 밝게
-      let haze = mix(tcol, vec3f(0.97), 0.4) * (wrap * sh * 0.35 + 0.75);
-      col = mix(col, haze, frost * 0.7);
-      col += mix(pow(max(dot(n, Hh), 0.0), 140.0) * 1.2, pow(max(dot(n, Hh), 0.0), 24.0) * 0.18, frost) * max(sh, 0.3);
-      if (lid == 6) { let fl = flake(p, Hh); col += fl.rgb * fl.a * 1.2; }   // 겉면에 걸린 반짝이
-    }
+    col = soapLight(alb, n, V, L, sh, ao, fresh, thin);
+    // 거친 깎은 면(칼·끌·부스러짐)의 물기는 날카로운 점 반짝임 대신 퍼진 광택으로 (요철 법선에서 흰 점이 튀었다)
+    let Hh = normalize(L + V);
+    let roughW = smoothstep(0.42, 0.46, kind);
+    col += wet * pow(max(dot(n, Hh), 0.0), mix(160.0, 50.0, roughW)) * mix(1.1, 0.45, roughW) * max(sh, 0.3);
+    let fres = pow(1.0 - max(dot(n, V), 0.0), 4.0);
     col += wet * (0.10 + fres * 0.45) * mix(vec3f(0.35, 0.34, 0.38), vec3f(0.85, 0.86, 0.9), smoothstep(-0.2, 0.8, reflect(-V, n).y));
     if (!preview) {
       // 덩어리감: 깎인 홈 안쪽(오목한 곳)은 조금 어둡게(AO, 비누에만), 윤곽은 림 라이트로 배경과 떼어 낸다
@@ -516,7 +288,6 @@ fn Tc(p: vec3f) -> f32 {        // 목표 모양 (원래 좌표 = 비누 격자 
   if (any(q < vec3f(0.0)) || any(q > vec3f(1.0))) { return 9.0; }
   return textureSampleLevel(ttex, csmp, q, 0.0).r;
 }
-${transmitWGSL('transmitC', 'Sc', 'Nc', '(K.m * vec4f(q, 1.0)).xyz', '(K.m * vec4f(d2, 0.0)).xyz', 'Tc')}
 
 struct BOut { @builtin(position) pos: vec4f, @location(0) op: vec3f };
 @vertex fn vsChunk(@builtin(vertex_index) vi: u32) -> BOut {
@@ -549,18 +320,10 @@ struct COut2 { @location(0) color: vec4f, @builtin(frag_depth) depth: f32 };
   let L = normalize((K.inv * vec4f(U.light.xyz, 0.0)).xyz);
   let V = -rd;
   let Hh = normalize(L + V);
-  let id = i32(U.look.w + 0.5);
-  let fr = 0.04 + 0.96 * pow(1.0 - max(dot(n, V), 0.0), 5.0);
-  let rw = normalize((K.m * vec4f(reflect(rd, n), 0.0)).xyz);
-  let refl = envColor(rw) * 1.6 + vec3f(0.08);
-  var col = mix(transmitC(p, rd, n, id, L, n), refl, fr) + pow(max(dot(n, Hh), 0.0), 140.0) * 1.2;
-  if (id == 8) {                                                    // 스크래치 비누 덩어리: 불투명 (p = 원래 좌표)
-    let sa = scratchAlb(p);
-    let wrap = max((dot(n, L) + 0.35) / 1.35, 0.0);
-    col = sa.rgb * (wrap * 0.8 + 0.3) + pow(max(dot(n, Hh), 0.0), mix(30.0, 120.0, sa.a)) * mix(0.15, 0.8, sa.a) + refl * fr * sa.a * 0.5;
-  }
+  // 불투명 비누: 원래 비누 겉면 근처(0.3 mm 안)만 껍질 색, 나머지(잘린 면·속)는 밝은 깎인 면 색
+  let cutC = smoothstep(0.015, 0.04, origDepth(p));
+  var col = soapLight(soapAlb(U.look.rgb, p, cutC), n, V, L, 1.0, 1.0, cutC, 0.0);
   col += rimLight(normalize((K.m * vec4f(n, 0.0)).xyz), normalize((K.m * vec4f(V, 0.0)).xyz));
-  if (id == 6) { let fl = flake(p, Hh); col += fl.rgb * fl.a * 1.2; }
   var o: COut2;
   o.color = vec4f(toScreen(col), 1.0);
   let c = U.vp * (K.m * vec4f(p, 1.0));
@@ -578,35 +341,14 @@ struct COut { @builtin(position) pos: vec4f, @location(0) wp: vec3f, @location(1
 @vertex fn vsChip(i: CIn) -> COut {
   var o: COut; o.pos = U.vp * vec4f(i.pos, 1.0); o.wp = i.pos; o.n = i.nrm; o.th = i.th; o.shade = i.shade; o.orig = i.orig; return o;
 }
-// 칩 = 비누를 얇게 깎은 막: 깎여 나온 자리(orig)의 비누 재질 색으로, 두께·각도만큼 비쳐 보이게 (반투명)
+// 칩 = 비누를 얇게 깎은 리본: 불투명 비누의 깎인 면 색, 얇을수록 뒤에서 빛이 비친다
 @fragment fn fsChip(i: COut) -> @location(0) vec4f {
   let V = normalize(U.eye.xyz - i.wp);
   var n = normalize(i.n);
   if (dot(n, V) < 0.0) { n = -n; }
-  let L = U.light.xyz;
-  let Hh = normalize(L + V);
-  let id = i32(U.look.w + 0.5);
-  let m = medium(i.orig, Hh, id);
-  var base = mix(U.look.rgb, m.rgb, smoothstep(0.0, 0.03, m.a));
-  var dens = m.a / 0.05;                                            // cm당 탁도
-  var floorA = 0.42;
-  if (id == 2) { floorA = 0.55; }
-  if (id == 7) {
-    floorA = 0.22;
-    let q = (i.orig - U.gmin.xyz) / U.gsize.xyz;
-    if (all(q >= vec3f(0.0)) && all(q <= vec3f(1.0)) && textureSampleLevel(tgtM, smpM, q, 0.0).r < 0.0) {
-      base = vec3f(1.0, 0.62, 0.52); dens = 400.0;                  // 속 모양을 깎은 칩은 산호색 불투명
-    }
-  }
-  if (id == 8) { base = scratchAlb(i.orig).rgb; dens = 400.0; }     // 스크래치: 검은 막·그림 조각 그대로 불투명
-  let ndv = max(abs(dot(n, V)), 0.2);
-  let fres = pow(1.0 - ndv, 3.0);
-  let a = clamp(floorA + (1.0 - exp(-dens * i.th / ndv)) + fres * 0.35, 0.0, 0.97);
-  let wrap = max((dot(n, L) + 0.4) / 1.4, 0.0);
-  var c = base * i.shade * (wrap * 0.75 + 0.4);
-  c += pow(max(dot(n, Hh), 0.0), 80.0) * 0.6 + fres * 0.12;           // 젖은 듯한 광택
-  if (id == 6) { let fl = flake((i.orig + i.wp * 0.3) * 2.5, Hh); c += fl.rgb * fl.a * 1.3; }   // 반짝이 (칩은 작아서 촘촘하게)
-  return vec4f(toScreen(c), a);
+  let alb = soapAlb(U.look.rgb, i.orig, 1.0) * i.shade;
+  let c = soapLight(alb, n, V, U.light.xyz, 1.0, 1.0, 1.0, exp(-i.th / 0.03));
+  return vec4f(toScreen(c), 1.0);
 }
 
 struct KIn { @location(0) pos: vec3f, @location(1) nrm: vec3f, @location(2) mat: f32 };
@@ -684,10 +426,8 @@ export class Renderer {
       fragment: { module: mesh, entryPoint: fs, targets: [{ format, ...(extra.blend ? { blend: extra.blend } : {}) }] },
       primitive: { topology: 'triangle-list', cullMode: 'none' },
       depthStencil: extra.depth || depth });
-    // 칩은 반투명: 섞어 그리고 깊이는 쓰지 않는다 (불투명한 것들 다음에 그림)
-    this.chipPipe = mk('vsChip', 'fsChip', chipLayout, { blend: {
-      color: { srcFactor: 'src-alpha', dstFactor: 'one-minus-src-alpha' }, alpha: { srcFactor: 'zero', dstFactor: 'one' } },
-      depth: { format: 'depth32float', depthWriteEnabled: false, depthCompare: 'less' } });
+    // 칩은 불투명 비누: 깊이를 쓰며 그린다
+    this.chipPipe = mk('vsChip', 'fsChip', chipLayout);
     // 떨어진 조각: 상자 뒷면을 그려 그 안을 레이마칭 (group 1 = 조각 uniform·거리장 텍스처)
     const chunkMod = device.createShaderModule({ code: CHUNK_WGSL });
     this.modules.push(chunkMod);

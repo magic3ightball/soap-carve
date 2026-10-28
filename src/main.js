@@ -357,7 +357,6 @@ function setTarget(key) {
   $('pv_name').textContent = key ? '목표: ' + TARGETS[key].name : '';
   $('prog').style.display = key ? 'block' : 'none';
   syncGuide();
-  refreshEmbed();
 }
 // 완성 기준. 예전(진행 90%·너무 깎음 10%)은 물고기 둘레에 3 mm 넘는 투명 테두리가 1.5 cm³ 남은 '덩어리'에서도 완성이 떴다.
 // 자동 플레이로 끝까지 깎으면 진행 96%·3 mm 넘는 군살 0.06 cm³·너무 깎음 1.8%까지 간다 (tools/regress/out/strict1).
@@ -393,16 +392,14 @@ $('b_guide').onclick = () => { if (tgt.key) { renderer.guide = !renderer.guide; 
 $('b_new').onclick = newSoap;
 $('b_undo').onclick = undo;
 $('b_clear').onclick = () => { chips.clear(); chunks.clear(); };
-// 비누 종류 — 모두 투명 녹여 붓기(melt & pour) 비누 레퍼런스: 비누 속 박기(embed), 기울인 층, 버블랩 벌집, 마이카 반짝이.
-// id는 셰이더의 비누 번호
+// 비누 종류 (v2) — 조각용 불투명·무광 비누 (아이보리처럼 무르고 다루기 쉬운 쪽). base는 선형 RGB, id는 셰이더의 비누 번호
 const LOOKS = [
-  { id: 7, name: '모양 품은 비누', base: [0.90, 0.97, 0.98], sw: 'radial-gradient(ellipse 40% 26% at 50% 55%,#ff9e85 0 90%,transparent 100%),linear-gradient(135deg,rgba(225,250,250,.95),rgba(170,220,225,.7))' },
-  { id: 1, name: '젤리 층', base: [0.96, 0.78, 0.84], sw: 'linear-gradient(160deg,#f7b9cc 0 25%,#f4f2fb 25% 50%,#a9e8d2 50% 75%,#ffe39a 75%)' },
-  { id: 2, name: '꿀 벌집', base: [0.96, 0.66, 0.24], sw: 'radial-gradient(circle at 35% 35%,#ffe0a0,#e8932a)' },
-  { id: 8, name: '스크래치', base: [0.93, 0.91, 0.86], sw: 'linear-gradient(150deg,#16151b 0 30%,#ff9a6b 30% 36%,#16151b 36% 55%,#5fd0dc 55% 60%,#16151b 60% 78%,#ffd75e 78% 82%,#16151b 82%)' },
-  { id: 6, name: '반짝이', base: [0.97, 0.84, 0.92], sw: 'radial-gradient(circle at 30% 35%,#fff 0 5%,transparent 6%),radial-gradient(circle at 65% 60%,#ffd27a 0 5%,transparent 6%),radial-gradient(circle at 45% 75%,#ffb3dc 0 4%,transparent 5%),linear-gradient(135deg,#f6d6e8,#e7c2dc)' },
+  { id: 10, name: '아이보리', base: [0.88, 0.815, 0.701], sw: '#F1E9DA' },
+  { id: 11, name: '라벤더', base: [0.716, 0.61, 0.831], sw: '#DCCDEB' },
+  { id: 12, name: '민트', base: [0.584, 0.815, 0.694], sw: '#C9E9D9' },
+  { id: 13, name: '복숭아', base: [0.913, 0.624, 0.497], sw: '#F5CFBB' },
 ];
-let lookId = 7;
+let lookId = 10;
 function setLook(id) {
   const l = LOOKS.find(x => x.id === id) || LOOKS[0];
   lookId = l.id;
@@ -410,19 +407,11 @@ function setLook(id) {
   document.querySelectorAll('[data-look]').forEach(b => b.classList.toggle('on', +b.dataset.look === l.id));
   $('look_name').textContent = l.name;
   try { localStorage.setItem('soapcarve.look', String(l.id)); } catch { /* 저장소 막힘 */ }
-  refreshEmbed();
-}
-// '모양 품은 비누'의 속 모양은 목표 모양 텍스처를 쓴다. 자유 조각이면 물고기를 넣어 둔다 (가이드·채점은 꺼진 채)
-let fishArr = null;
-function refreshEmbed() {
-  if (tgt.key) return;                                   // 목표를 골랐으면 그 모양이 이미 올라가 있다
-  if (lookId === 7) sdf.setTarget(fishArr || (fishArr = buildTarget(sdf, 'fish')));
-  else sdf.setTarget(null);
 }
 $('looks').innerHTML = LOOKS.map(l => `<button data-look="${l.id}" title="${l.name}" style="background:${l.sw}"></button>`).join('');
 document.querySelectorAll('[data-look]').forEach(b => b.onclick = () => setLook(+b.dataset.look));
-let savedLook = 7;
-try { savedLook = +(localStorage.getItem('soapcarve.look') ?? 7); } catch { /* 저장소 막힘 */ }
+let savedLook = 10;
+try { savedLook = +(localStorage.getItem('soapcarve.look') ?? 10); } catch { /* 저장소 막힘 */ }
 setLook(savedLook);
 
 function setTool(t) {
