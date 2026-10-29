@@ -7,3 +7,11 @@ node_modules/
 # 회귀·자동 플레이 캡처는 다시 만들 수 있어 기준(reference)만 저장소에 둔다
 tools/regress/out/*
 !tools/regress/out/reference/
+.venv/
+venv/
+__pycache__/
+.DS_Store
+.next/
+*.tsbuildinfo
+.omc/
+.claude/settings.local.json
